@@ -1,0 +1,191 @@
+# StoryCraft
+
+<img width="1907" height="867" alt="sc1" src="https://github.com/user-attachments/assets/7e9d63f8-6ede-4c0a-9502-a2a9bdf9cdee" />
+<img width="1916" height="867" alt="sc2" src="https://github.com/user-attachments/assets/3513aa75-8b83-4548-868f-cad9cd0bc413" />
+
+**Turn a folder of scene images and one narration script into a finished, narrated video,
+automatically.**
+
+StoryCraft is a small app that runs on your own Windows PC. You give it your story's images in
+order and paste the narration. It speaks the narration with **Kokoro** (a free text-to-speech voice
+running on your PC), times every scene to the speech, adds moving camera shots and burned-in
+subtitles, and exports an MP4 ready to upload:
+
+- **9:16 vertical** (1080 × 1920) for YouTube Shorts, Facebook Reels, TikTok
+- **16:9 landscape** (1920 × 1080) for regular YouTube videos
+
+No editing timeline and no accounts. There are no paid APIs and no cloud: everything is processed
+locally and works offline once it's set up.
+
+---
+
+## How it works
+
+```
+images + script ──► split script into scenes ──► Kokoro speaks each scene
+                                                        │
+                    MP4 ◄── FFmpeg renders ◄── scene length = length of its narration
+                             (motion, transitions,      subtitles timed to the spoken words
+                              subtitles, watermark)
+```
+
+1. **Scenes**: each image is one scene, shown in order (`scene_2` comes before `scene_10`).
+2. **Script → scenes**: paste the whole story once. If it has labels like `SCENE 1`, each section goes
+   to its numbered scene. If not, StoryCraft divides it across your images at paragraph and
+   sentence breaks, and you review and adjust the split before applying it.
+3. **Narration**: Kokoro reads each scene. StoryCraft measures the real audio, so every image stays
+   on screen exactly as long as its narration, plus a short pause. You never type durations.
+4. **Subtitles**: Kokoro reports when every word is spoken, so short captions (about 3–7 words)
+   appear and disappear in sync with the voice.
+5. **Video**: FFmpeg animates each image with a slow zoom or pan, shows it whole without cropping,
+   adds cuts or fades, burns in subtitles and your watermark, and encodes the MP4 (H.264 / AAC).
+
+Narration is cached per sentence. Changing images, subtitle style, motion or timing never makes
+Kokoro speak again; editing a sentence only re-speaks that sentence.
+
+---
+
+## What you need
+
+| | |
+|---|---|
+| **Windows 10 / 11** | |
+| **Python 3.10 or newer** | [python.org/downloads](https://www.python.org/downloads/) (keep the default options; tkinter is included) |
+| **Kokoro**, installed in that Python | Either kind works, see below |
+| **FFmpeg** | In a terminal: `winget install Gyan.FFmpeg` |
+| **Git** (to download / update) | [git-scm.com](https://git-scm.com/), or use GitHub's *Download ZIP* button |
+
+**Kokoro**: StoryCraft uses the Kokoro you already have. It does not download its own.
+
+- **hexgrad/Kokoro-82M (PyTorch)**: installed with `pip install kokoro` (which brings `torch`), with
+  the model downloaded at least once (it lands in the Hugging Face cache), or in a folder containing
+  `kokoro-v1_0.pth`, `config.json` and `voices\*.pt`.
+- **kokoro-onnx**: `pip install kokoro-onnx` plus the files `kokoro-v1.0.onnx` and `voices-v1.0.bin`.
+
+---
+
+## Getting started (after cloning)
+
+**1. Get the code**
+
+```
+git clone https://github.com/Yinkci/StoryCraft.git
+```
+
+(or on GitHub: **Code → Download ZIP**, then unzip it)
+
+**2. Double-click `start.bat`** in the `StoryCraft` folder.
+
+A black window opens. The **first start needs internet** and takes about a minute. It will:
+
+- find the Python on your PC that has Kokoro installed;
+- create StoryCraft's own environment (`.venv`) that reuses that Python's packages;
+- install the few small packages StoryCraft needs (FastAPI, Uvicorn);
+- find your Kokoro model and FFmpeg automatically;
+- open the app in your browser at **http://127.0.0.1:8765**.
+
+**3. Check the top-right corner** of the app. It should show **Kokoro (PyTorch) · 54 voices** (or
+*Kokoro (ONNX)*) and **FFmpeg** with green dots. If so, you're ready.
+
+From then on, just double-click `start.bat`. Keep the black window open while you work;
+closing it stops StoryCraft.
+
+### If something isn't found
+
+- **"Setup needed" → Locate Kokoro…**: pick your model file: `kokoro-v1_0.pth` (Kokoro-82M) or
+  `kokoro-v1.0.onnx`. A downloaded Kokoro-82M usually lives in
+  `C:\Users\<you>\.cache\huggingface\hub\models--hexgrad--Kokoro-82M\snapshots\<id>\`.
+- **"Setup needed" → Locate FFmpeg…**: install FFmpeg (`winget install Gyan.FFmpeg`) and restart
+  StoryCraft, or pick `ffmpeg.exe`.
+- **The black window says no Python has Kokoro**: your Kokoro is probably inside a separate
+  virtual environment. Create a text file named `python_path.txt` next to `start.bat` containing
+  the full path of that environment's Python, for example
+  `C:\Users\you\kokoro-env\Scripts\python.exe`, then start again.
+- **"Python 3.10 or newer was not found"**: install Python from python.org.
+
+Your choices are remembered in `config.json` (created on your PC, never uploaded to GitHub).
+
+### Updating
+
+```
+git pull
+```
+
+Then close the black window, double-click `start.bat` again, and press **Ctrl+F5** in the browser.
+(The app also shows a banner when it notices its files changed and it needs a restart.)
+
+---
+
+## Making a video
+
+1. **Add your images**: drag them onto the scene list (or click the drop area). PNG, JPG and WebP
+   are supported. They're sorted by file name.
+2. **Import full script**: paste your whole narration and click **Auto assign to scenes**.
+   - *With labels* (`SCENE 1`, `Scene 01:`, `[Scene 1]`, `Scene 1 — Apartment`): each section goes
+     to that scene and the labels aren't spoken. You get a warning if the count doesn't match the
+     number of images.
+   - *Without labels*: the story is split into one part per image, preferring paragraph and
+     sentence breaks. **This is an estimate**: StoryCraft does not look at the pictures, so check
+     each image against its text in the review. Use **▼ / ▲** to move a sentence to the
+     neighbouring scene, or edit the text directly. The review confirms that every word was used
+     exactly once, in order.
+   - Nothing changes until you click **Apply**, and **Undo** is offered right after.
+3. **Generate narration**: Kokoro speaks all scenes, and each scene shows its length. Use
+   **▶ Narration** on a scene to hear just that one; pick the voice and speed under *Settings → Voice*
+   (**Test voice** plays a sample).
+4. **Preview video**: a quick half-size render with the real timing, motion, subtitles and
+   transitions. Play, pause and seek it in the middle column.
+5. **Export MP4**: the full-quality video goes to the output folder set under *Settings → Export*
+   (default: the `exports` folder).
+
+You can still edit any scene's text box by hand, reorder scenes by dragging **⋮⋮** (or ↑ ↓),
+replace an image by clicking its thumbnail, and duplicate or delete scenes.
+
+**Save / Open** keep a project as a `.storycraft.json` file (default folder: `projects`). Your
+current work is also autosaved in the browser. Uploaded images are copied into the `media` folder;
+your original files are never changed.
+
+---
+
+## Settings at a glance
+
+- **Format**: switch above the preview: *9:16 Shorts / Reels* or *16:9 YouTube*, in 1080p or 720p.
+  Subtitles move to a layout that suits the format.
+- **Voice**: any installed Kokoro voice, speed 0.5×–2×.
+- **Subtitles**: on/off (**CC** switch under the preview), font, size, color, outline, shadow,
+  bold, UPPERCASE, words per caption, and position: X, Y and caption width. You can also drag the
+  caption on the preview. **✥ Adjust positions** lets you drag it on a still frame after rendering.
+- **Title text**: a headline at the top of the video (e.g. *ZOMBIE OUTBREAK: … PART 2*). It can
+  have several lines, each with its own size. Wrap words in `*asterisks*` to give them the highlight
+  color. It's centered at the top by default; move it with X / Y or drag it on the preview. Font,
+  colors, outline and UPPERCASE are adjustable, and it can show for the whole video or the first few
+  seconds.
+- **Watermark**: your text (e.g. `@YourChannel`), bottom right by default. Snap it to any corner,
+  edge or the center with the 3×3 grid, fine-tune with X / Y, or drag it on the preview. Size,
+  opacity, font, color and outline are adjustable.
+- **Motion & transitions**: static, slow zoom in/out, slow pan left/right, or random subtle movement
+  (per scene or for all). Fit mode is *Contain*: the whole image is shown with black bars if
+  needed, never cropped or stretched. *Cover* fills the frame and crops. Transitions: cut,
+  crossfade or fade through black. They always happen in the pause between scenes, so speech is
+  never cut off.
+- **Timing**: pause between scenes, pause between sentences, lead-in, hold at the end.
+- **Export**: output folder, file name, frame rate (24/30/60), quality, and **Clear video cache**.
+
+---
+
+## Folder layout
+
+```
+start.bat            double-click to run (finds Python + Kokoro, see tools/launch.py)
+app/                 the app: web server (main.py), Kokoro narration (tts.py),
+                     subtitles (captions.py), video rendering (render.py), interface (static/)
+tools/               launcher and share-zip builder
+sample/              a few test images
+make_share_zip.bat   optional: build dist\StoryCraft.zip to hand over without GitHub
+
+Created on your PC (not on GitHub):
+.venv/               StoryCraft's Python environment (rebuilt automatically if needed)
+config.json          where Kokoro and FFmpeg are on this PC
+media/ projects/ exports/   your images, projects and videos
+workspace/           caches and previews; safe to delete, or use *Clear video cache*
+```

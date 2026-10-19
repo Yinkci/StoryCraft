@@ -1,0 +1,15 @@
+# Per-PC setup (recreated automatically on each computer)
+.venv/
+config.json
+python_path.txt
+
+# Your own work: images, projects, videos (created when you use the app)
+media/
+projects/
+exports/
+
+# Caches, previews and build output
+workspace/
+dist/
+__pycache__/
+*.pyc
