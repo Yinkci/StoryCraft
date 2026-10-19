@@ -1,7 +1,10 @@
 # StoryCraft
 
-<img width="1907" height="867" alt="sc1" src="https://github.com/user-attachments/assets/7e9d63f8-6ede-4c0a-9502-a2a9bdf9cdee" />
-<img width="1916" height="867" alt="sc2" src="https://github.com/user-attachments/assets/3513aa75-8b83-4548-868f-cad9cd0bc413" />
+
+<img width="1907" height="867" alt="sc1" src="https://github.com/user-attachments/assets/829ab031-bae7-443e-9d09-789a2ea07101" />
+
+<img width="1916" height="867" alt="sc2" src="https://github.com/user-attachments/assets/24bb5188-668a-4111-9db9-bd08a79fbad3" />
+
 
 **Turn a folder of scene images and one narration script into a finished, narrated video,
 automatically.**
