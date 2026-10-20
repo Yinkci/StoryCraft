@@ -167,31 +167,40 @@ def title_has_text(title):
     return bool(title and title.get("enabled") and any((l.get("text") or "").strip() for l in title.get("lines", [])))
 
 
-def title_line(title, play_w, play_h, duration):
-    """The title overlay as one Dialogue line: each title line has its own size, and words wrapped
-    in *asterisks* use the highlight color. X/Y place the top-center of the block (% of frame)."""
+def title_lines(title, play_w, play_h, duration):
+    """The title overlay: one Dialogue per title line, so each line can be placed on its own.
+
+    Line k gets a slot of height size*spacing, stacked from the top (X/Y = top-center of the
+    title, % of the frame). Its text is centered in the slot (like CSS line-height) and then
+    moved by the line's own offset (px in the 1080p frame; + = down) without moving the others.
+    Words wrapped in *asterisks* use the highlight color."""
     if not title_has_text(title):
-        return None
+        return []
     main, accent = _ass_color(title.get("color", "#FFFFFF")), _ass_color(title.get("highlight", "#FF8A1F"))
     x = play_w * min(max(float(title.get("position_x", 50)), 0), 100) / 100
-    y = play_h * min(max(float(title.get("position_y", 5)), 0), 100) / 100
-    rows = []
+    slot_top = play_h * min(max(float(title.get("position_y", 5)), 0), 100) / 100
+    spacing = min(max(float(title.get("line_spacing", 85)), 40), 200) / 100
+    end = float(title.get("duration") or 0) or duration + 1
+    out = []
     for line in title.get("lines", []):
         text = (line.get("text") or "").strip()
         if not text:
             continue
         if title.get("uppercase", True):
             text = text.upper()
+        size = int(line.get("size", 90))
+        slot = size * spacing
+        y = slot_top + (slot - size) / 2 + float(line.get("offset", 0) or 0)
         parts, pos = [], 0
         for m in HIGHLIGHT.finditer(text):
             parts.append(_ass_escape(text[pos:m.start()]))
             parts.append(rf"{{\c{accent[:2]}{accent[4:]}&}}{_ass_escape(m.group(1))}{{\c{main[:2]}{main[4:]}&}}")
             pos = m.end()
         parts.append(_ass_escape(text[pos:].replace("*", "")))
-        rows.append(rf"{{\fs{int(line.get('size', 90))}}}" + "".join(parts))
-    end = float(title.get("duration") or 0) or duration + 1
-    return (rf"Dialogue: 2,{_ass_time(0)},{_ass_time(end)},Title,,0,0,0,,{{\an8\pos({x:.0f},{y:.0f})\q2}}"
-            + r"\N".join(rows))
+        out.append(rf"Dialogue: 2,{_ass_time(0)},{_ass_time(end)},Title,,0,0,0,,{{\an8\pos({x:.0f},{y:.0f})\q2\fs{size}}}"
+                   + "".join(parts))
+        slot_top += slot
+    return out
 
 
 def write_ass(path, events, style, width=1080, height=1920, watermark=None, duration=0.0, title=None):
@@ -248,8 +257,6 @@ def write_ass(path, events, style, width=1080, height=1920, watermark=None, dura
     wm_line = watermark_line(watermark or {}, play_w, play_h, duration)
     if wm_line:
         lines.append(wm_line)
-    t_line = title_line(title or {}, play_w, play_h, duration)
-    if t_line:
-        lines.append(t_line)
+    lines.extend(title_lines(title or {}, play_w, play_h, duration))
     with open(path, "w", encoding="utf-8-sig") as f:
         f.write("\n".join(lines) + "\n")

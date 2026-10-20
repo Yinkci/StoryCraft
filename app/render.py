@@ -48,7 +48,7 @@ DEFAULT_SETTINGS = {
                   "uppercase": False, "position": 26, "position_x": 50, "max_width": 84,
                   "words_per_caption": 5},
     "imagegen": {"style": "", "no_text": True, "references": [], "continuity": True},
-    "title": {"enabled": False, "lines": [{"text": "", "size": 90}], "font": "Impact", "color": "#FFFFFF",
+    "title": {"enabled": False, "lines": [{"text": "", "size": 90, "offset": 0}], "line_spacing": 85, "font": "Impact", "color": "#FFFFFF",
               "highlight": "#FF8A1F", "outline": 4, "outline_color": "#000000", "shadow": 2, "bold": False,
               "uppercase": True, "position_x": 50, "position_y": 5, "duration": 0},
     "watermark": {"enabled": False, "text": "", "font": "Arial", "size": 40, "color": "#FFFFFF",

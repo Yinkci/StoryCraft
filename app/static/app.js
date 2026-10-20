@@ -377,7 +377,7 @@ const BIND = [
   ["tHighlight", "title", "highlight"], ["tOutlineColor", "title", "outline_color"],
   ["tUpper", "title", "uppercase", "bool"], ["tBold", "title", "bold", "bool"],
   ["tOutline", "title", "outline", "num", "oTOutline", (v) => v], ["tShadow", "title", "shadow", "num", "oTShadow", (v) => v],
-  ["tPosX", "title", "position_x", "num"], ["tPosY", "title", "position_y", "num"], ["tDuration", "title", "duration", "num"],
+  ["tSpacing", "title", "line_spacing", "num"], ["tPosX", "title", "position_x", "num"], ["tPosY", "title", "position_y", "num"], ["tDuration", "title", "duration", "num"],
   ["wEnabled", "watermark", "enabled", "bool"], ["wText", "watermark", "text"], ["wFont", "watermark", "font"],
   ["wPosX", "watermark", "position_x", "num"], ["wPosY", "watermark", "position_y", "num"],
   ["wSize", "watermark", "size", "num"], ["wOpacity", "watermark", "opacity", "num"],
@@ -530,17 +530,21 @@ function titleChanged() {
 
 function renderTitleLines() {
   const box = $("#titleLines"), t = S().title;
-  if (!Array.isArray(t.lines) || !t.lines.length) t.lines = [{ text: "", size: 90 }];
-  box.innerHTML = "";
+  if (!Array.isArray(t.lines) || !t.lines.length) t.lines = [{ text: "", size: 90, offset: 0 }];
+  box.innerHTML = `<div class="title-lines-head"><span>Text</span><span>Size</span><span title="Move this line up (−) or down (+), in px">Move ↕</span><span></span></div>`;
   t.lines.forEach((line, i) => {
     const row = document.createElement("div");
     row.className = "title-line";
     row.innerHTML = `<input spellcheck="true" placeholder="${i === 0 ? "*ZOMBIE* OUTBREAK:" : "Next line"}">
       <input type="number" class="num" min="16" max="240" step="1" title="Size of this line (px)">
+      <span class="off"><input type="number" class="num" min="-400" max="400" step="2" title="Move only this line up (negative) or down (positive), in px"><span>px</span></span>
       <button class="icon-btn" title="Remove this line">✕</button>`;
-    const [text, size, del] = row.children;
+    const [text, size, offWrap, del] = row.children;
+    const off = offWrap.querySelector("input");
     text.value = line.text || "";
     size.value = line.size || 90;
+    off.value = line.offset || 0;
+    off.addEventListener("input", () => { if (off.value !== "" && !isNaN(+off.value)) { line.offset = Math.max(-400, Math.min(400, +off.value)); titleChanged(); } });
     text.addEventListener("input", () => { line.text = text.value; titleChanged(); });
     size.addEventListener("input", () => { if (+size.value >= 16) { line.size = Math.min(240, +size.value); titleChanged(); } });
     del.addEventListener("click", () => {
@@ -552,7 +556,7 @@ function renderTitleLines() {
 }
 $("#btnAddTitleLine").addEventListener("click", () => {
   const lines = S().title.lines, last = lines[lines.length - 1];
-  lines.push({ text: "", size: Math.max(30, Math.round((last?.size || 90) * 0.65)) });   // e.g. a smaller "PART 2"
+  lines.push({ text: "", size: Math.max(30, Math.round((last?.size || 90) * 0.65)), offset: 0 });   // e.g. a smaller "PART 2"
   renderTitleLines();
   $("#titleLines").lastElementChild.querySelector("input").focus();
   markDirty();
@@ -581,8 +585,12 @@ function updateTitlePreview(scale) {
       pos = m.index + m[0].length;
     }
     row.appendChild(document.createTextNode(text.slice(pos).replace(/\*/g, "")));
+    // Same layout as the renderer: a slot of size*spacing per line, text centered in it, then this line's own offset.
+    const spacing = Math.min(200, Math.max(40, +t.line_spacing || 85)) / 100;
     row.style.fontSize = `calc(${line.size * scale * k}cqh)`;
-    row.style.lineHeight = `calc(${line.size * scale}cqh)`;   // ASS line height = the size value
+    row.style.lineHeight = `calc(${line.size * spacing * scale}cqh)`;
+    row.style.position = "relative";
+    row.style.top = `calc(${(+line.offset || 0) * scale}cqh)`;
     el.appendChild(row);
   }
   el.style.left = `${t.position_x}%`;

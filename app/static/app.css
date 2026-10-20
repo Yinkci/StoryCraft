@@ -206,7 +206,11 @@ body.landscape .layout { grid-template-columns: minmax(0, 1.4fr) minmax(380px, 1
 .poster-title.dragging { cursor: grabbing; }
 .poster-title > div { display: block; }
 .title-lines { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
-.title-line { display: grid; grid-template-columns: minmax(0, 1fr) 58px 26px; gap: 6px; align-items: center; }
+.title-line { display: grid; grid-template-columns: minmax(0, 1fr) 58px 64px 26px; gap: 6px; align-items: center; }
+.title-line .off { display: flex; align-items: center; gap: 2px; }
+.title-line .off span { color: var(--muted); font-size: 12px; }
+.title-line .off input { width: 52px; padding: 6px 4px; text-align: right; }
+.title-lines-head { display: grid; grid-template-columns: minmax(0, 1fr) 58px 64px 26px; gap: 6px; font-size: 11px; color: #646b7b; margin-bottom: 2px; }
 .title-line input.num { width: 58px; padding: 6px; text-align: right; }
 .title-line .icon-btn { width: 26px; height: 26px; }
 .title-warn { font-size: 12px; color: var(--accent); margin: -2px 0 10px; }
