@@ -106,6 +106,70 @@ function scheduleAutosave() {
 /* ---------------------------------------------------------------- scenes UI */
 const list = $("#sceneList");
 
+/* ---- multi-select: checkboxes on the cards + a bar with bulk actions ---- */
+const bulk_sel = { ids: new Set(), anchor: null };
+
+function toggleChecked(i, on, range) {
+  const scenes = state.project.scenes;
+  if (range && bulk_sel.anchor !== null && bulk_sel.anchor < scenes.length) {
+    const [a, b] = [Math.min(bulk_sel.anchor, i), Math.max(bulk_sel.anchor, i)];
+    for (let k = a; k <= b; k++) on ? bulk_sel.ids.add(scenes[k].id) : bulk_sel.ids.delete(scenes[k].id);
+  } else {
+    on ? bulk_sel.ids.add(scenes[i].id) : bulk_sel.ids.delete(scenes[i].id);
+  }
+  bulk_sel.anchor = i;
+  refreshChecks();
+}
+
+function refreshChecks() {
+  const ids = new Set(state.project.scenes.map((s) => s.id));
+  for (const id of [...bulk_sel.ids]) if (!ids.has(id)) bulk_sel.ids.delete(id);   // forget deleted scenes
+  list.querySelectorAll(".scene").forEach((el) => {
+    const on = bulk_sel.ids.has(el.dataset.id);
+    $(".bulk-check", el).checked = on;
+    el.classList.toggle("checked", on);
+  });
+  const n = bulk_sel.ids.size;
+  $("#bulkBar").hidden = n === 0;
+  $("#bulkCount").textContent = `${n} selected`;
+  const withImage = state.project.scenes.filter((s) => bulk_sel.ids.has(s.id) && s.image).length;
+  $("#bulkRemoveImages").disabled = withImage === 0;
+  $("#bulkRemoveImages").textContent = `🖼 Remove ${withImage} image${withImage === 1 ? "" : "s"}`;
+  $("#bulkDelete").textContent = `🗑 Delete ${n} scene${n === 1 ? "" : "s"}`;
+}
+
+$("#bulkSelectAll").addEventListener("click", () => { state.project.scenes.forEach((s) => bulk_sel.ids.add(s.id)); refreshChecks(); });
+$("#bulkClear").addEventListener("click", () => { bulk_sel.ids.clear(); bulk_sel.anchor = null; refreshChecks(); });
+
+$("#bulkRemoveImages").addEventListener("click", () => {
+  const changed = state.project.scenes.filter((s) => bulk_sel.ids.has(s.id) && s.image)
+    .map((s) => ({ s, image: s.image, image_name: s.image_name }));
+  if (!changed.length) return;
+  changed.forEach(({ s }) => { s.image = ""; s.image_name = ""; });     // files stay in media/, so Undo can restore
+  markDirty(); renderScenes(); updateBanner();
+  toast(`Removed ${changed.length} image${changed.length === 1 ? "" : "s"}. Narration kept.`, "Undo", () => {
+    changed.forEach(({ s, image, image_name }) => Object.assign(s, { image, image_name }));
+    markDirty(); renderScenes(); updateBanner();
+  }, 15000);
+});
+
+$("#bulkDelete").addEventListener("click", async () => {
+  const scenes = state.project.scenes;
+  const doomed = scenes.map((s, k) => ({ s, k })).filter(({ s }) => bulk_sel.ids.has(s.id));
+  if (!doomed.length) return;
+  const n = doomed.length;
+  if (!(await confirmBox(`Delete ${n} scene${n === 1 ? "" : "s"}?`,
+    `${n === 1 ? "This scene" : `These ${n} scenes`} and ${n === 1 ? "its" : "their"} narration will be removed. You can undo this right after.`,
+    `Delete ${n} scene${n === 1 ? "" : "s"}`))) return;
+  state.project.scenes = scenes.filter((s) => !bulk_sel.ids.has(s.id));
+  bulk_sel.ids.clear(); bulk_sel.anchor = null;
+  markDirty(); renderScenes();
+  toast(`Deleted ${n} scene${n === 1 ? "" : "s"}.`, "Undo", () => {
+    doomed.forEach(({ s, k }) => state.project.scenes.splice(Math.min(k, state.project.scenes.length), 0, s));   // back in place
+    markDirty(); renderScenes();
+  }, 15000);
+});
+
 function renderScenes() {
   list.innerHTML = "";
   const scenes = state.project.scenes;
@@ -114,6 +178,7 @@ function renderScenes() {
       Drop your numbered scene images below, or use <b>Bulk import</b> to add images and paste all scripts at once.</div>`;
   }
   scenes.forEach((sc, i) => list.appendChild(sceneElement(sc, i)));
+  refreshChecks();
   updateTotals();
   updatePoster();
 }
@@ -121,6 +186,15 @@ function renderScenes() {
 function sceneElement(sc, i) {
   const el = $("#sceneTpl").content.firstElementChild.cloneNode(true);
   el.dataset.id = sc.id;
+  const check = $(".bulk-check", el);
+  check.checked = bulk_sel.ids.has(sc.id);
+  el.classList.toggle("checked", check.checked);
+  check.addEventListener("click", (e) => toggleChecked(i, check.checked, e.shiftKey));
+  el.addEventListener("click", (e) => {
+    if (e.target.closest("button, select, .thumb, .handle, .bulk-check")) return;   // buttons keep their own action
+    if (state.selected !== i) selectScene(i);
+  });
+  el.addEventListener("focusin", (e) => { if (e.target.matches("textarea") && state.selected !== i) selectScene(i); });
   $(".num", el).textContent = i + 1;
   const thumb = $(".thumb", el), img = $("img", thumb);
   if (!sc.image) thumb.classList.add("empty");
@@ -137,7 +211,7 @@ function sceneElement(sc, i) {
     markDirty();
     updateSceneInfo(el, sc, i);
     updateTotals();
-    if (i === 0) updatePoster();
+    if (i === state.selected) updatePoster();
   });
 
   const motion = $(".motion", el);
@@ -148,6 +222,13 @@ function sceneElement(sc, i) {
   motion.addEventListener("change", () => { sc.motion = motion.value; markDirty(); });
 
   thumb.addEventListener("click", () => pickReplacement(sc.id));
+  $(".thumb-remove", thumb).addEventListener("click", (e) => {
+    e.stopPropagation();                          // don't open the "replace image" picker
+    const before = { image: sc.image, image_name: sc.image_name };
+    sc.image = ""; sc.image_name = "";            // the file stays in media/, so Undo can restore it
+    markDirty(); renderScenes(); updateBanner();
+    toast(`Scene ${i + 1}: image removed.`, "Undo", () => { Object.assign(sc, before); markDirty(); renderScenes(); updateBanner(); }, 8000);
+  });
   $(".act-replace", el).addEventListener("click", () => pickReplacement(sc.id));
   $(".act-dup", el).addEventListener("click", () => {
     state.project.scenes.splice(i + 1, 0, { ...clone(sc), id: uid() });
@@ -165,6 +246,7 @@ function sceneElement(sc, i) {
   $(".act-up", el).addEventListener("click", () => moveScene(i, i - 1));
   $(".act-down", el).addEventListener("click", () => moveScene(i, i + 1));
   $(".act-play", el).addEventListener("click", (e) => playScene(i, e.currentTarget));
+  $(".act-image", el).addEventListener("click", () => openImageModal(i));
 
   // drag to reorder (only from the handle) + drop an image file to replace
   const handle = $(".handle", el);
@@ -290,6 +372,7 @@ const BIND = [
   ["sPos", "subtitles", "position", "num"],
   ["sColor", "subtitles", "color"], ["sOutlineColor", "subtitles", "outline_color"],
   ["sBold", "subtitles", "bold", "bool"], ["sUpper", "subtitles", "uppercase", "bool"],
+  ["igNoText", "imagegen", "no_text", "bool"], ["igUsePrev", "imagegen", "continuity", "bool"],
   ["tEnabled", "title", "enabled", "bool"], ["tFont", "title", "font"], ["tColor", "title", "color"],
   ["tHighlight", "title", "highlight"], ["tOutlineColor", "title", "outline_color"],
   ["tUpper", "title", "uppercase", "bool"], ["tBold", "title", "bold", "bool"],
@@ -590,15 +673,92 @@ function updateWatermarkPreview(scale) {
 }
 
 /* ---------------------------------------------------------------- preview pane */
+/* Which scene the middle preview shows. Click a scene card or use ◀ ▶; with a rendered,
+   up-to-date preview video, selecting a scene jumps the video to where that scene starts. */
+function updateStepper() {
+  const n = state.project.scenes.length, i = state.selected || 0;
+  $("#sceneStepLabel").textContent = n ? `Scene ${i + 1} / ${n}` : "No scenes";
+  $("#btnPrevScene").disabled = i <= 0;
+  $("#btnNextScene").disabled = i >= n - 1;
+  document.querySelectorAll(".scene").forEach((el, k) => el.classList.toggle("selected", k === i));
+}
+
+function selectScene(i, { scroll = false } = {}) {
+  const n = state.project.scenes.length;
+  if (!n) return;
+  state.selected = Math.min(Math.max(0, i), n - 1);
+  const starts = state.preview.starts;
+  const fresh = state.preview.url && state.preview.sig === renderSig(state.project);
+  if (fresh && starts && starts[state.selected] !== undefined && !positioning) {
+    const v = $("#previewVideo");
+    v.pause();
+    v.currentTime = starts[state.selected] + 0.05;
+  } else if (state.preview.url && !positioning) {
+    setPositioning(true);            // stale or unknown timing: show the scene as a still frame
+  }
+  updatePoster();
+  if (scroll) list.children[state.selected]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+$("#btnPrevScene").addEventListener("click", () => selectScene((state.selected || 0) - 1, { scroll: true }));
+$("#btnNextScene").addEventListener("click", () => selectScene((state.selected || 0) + 1, { scroll: true }));
+
+/* The still preview plays the selected scene's captions one after another, like the video.
+   With generated narration it uses the real captions and timing; otherwise an estimate. */
+const capPlay = { key: "", phrases: [], idx: 0, timer: null };
+
+function scenePhrases(sc) {
+  const n = sc && state.narration[narrationSig(sc)];
+  if (n && n.captions && n.captions.length) {
+    return n.captions.map((c, k) => ({ text: c.text, secs: Math.max(0.8, (n.captions[k + 1]?.start ?? c.end + 0.4) - c.start) }));
+  }
+  const target = Math.max(2, +S().subtitles.words_per_caption || 5), out = [];
+  for (const sentence of ScriptSplit.splitSentences((sc?.script || "").replace(/\s+/g, " ").trim())) {
+    const w = sentence.split(" ").filter(Boolean);
+    const parts = w.length <= target + 1 ? 1 : Math.ceil(w.length / target);
+    for (let p = 0; p < parts; p++) {
+      const chunk = w.slice(Math.round((p * w.length) / parts), Math.round(((p + 1) * w.length) / parts));
+      if (chunk.length) out.push({ text: chunk.join(" "), secs: 0.45 + chunk.length * 0.32 });
+    }
+  }
+  return out;
+}
+
+function playCaptions(sc) {
+  const s = S().subtitles;
+  const phrases = scenePhrases(sc);
+  const key = JSON.stringify([sc?.id, phrases.map((p) => [p.text, +p.secs.toFixed(2)]), s.uppercase]);   // timing too: real timing replaces the estimate
+  if (key !== capPlay.key) {                       // new scene or new text: start from the first caption
+    capPlay.key = key; capPlay.phrases = phrases; capPlay.idx = 0;
+    clearTimeout(capPlay.timer); capPlay.timer = null;
+  }
+  showCaption();
+}
+
+function showCaption() {
+  const cap = $("#posterCaption"), list = capPlay.phrases, s = S().subtitles;
+  const text = list.length ? list[capPlay.idx % list.length].text : "the world was about to end.";
+  cap.textContent = s.uppercase ? text.toUpperCase() : text;
+  $("#capStepLabel").textContent = list.length > 1 ? `Caption ${(capPlay.idx % list.length) + 1} / ${list.length}` : "";
+  if (list.length > 1 && !capPlay.timer) {
+    capPlay.timer = setTimeout(() => {
+      capPlay.timer = null;
+      if (!cap.classList.contains("dragging")) capPlay.idx = (capPlay.idx + 1) % list.length;   // hold while dragging
+      showCaption();
+    }, list[capPlay.idx % list.length].secs * 1000);
+  }
+}
+
 function updatePoster() {
-  const s = S().subtitles, first = state.project.scenes.find((sc) => sc.image && !state.missing.has(sc.image));
+  const scenes = state.project.scenes;
+  state.selected = Math.min(Math.max(0, state.selected || 0), Math.max(0, scenes.length - 1));
+  const s = S().subtitles, current = scenes[state.selected];
+  const shown = current && current.image && !state.missing.has(current.image) ? current : null;
   const img = $("#posterImg");
   $("#poster").classList.toggle("cover", S().motion.fit === "cover");
-  if (first) img.src = imgUrl(first.image); else img.removeAttribute("src");
+  if (shown) img.src = imgUrl(shown.image); else img.removeAttribute("src");
+  updateStepper();
   const cap = $("#posterCaption");
-  const script = (state.project.scenes[0]?.script || "").trim();
-  const words = script ? script.split(/\s+/).slice(0, Math.max(2, +s.words_per_caption)).join(" ") : "the world was about to end.";
-  cap.textContent = s.uppercase ? words.toUpperCase() : words;
+  playCaptions(current);
   cap.hidden = !s.enabled;
   const cc = $("#btnSubToggle");
   cc.classList.toggle("on", !!s.enabled);
@@ -825,7 +985,7 @@ function finishJob(j) {
     if (kind === "narrate") {
       setProgress(`Narration ready — ${j.result.scenes.length} scenes, ${fmtSec(j.result.duration)} total (${j.elapsed}s)`, 1);
     } else if (kind === "preview") {
-      state.preview = { url: j.result.url, sig: renderSig(state.jobSnapshot) };
+      state.preview = { url: j.result.url, sig: renderSig(state.jobSnapshot), starts: (j.result.scenes || []).map((x) => x.start) };
       showPreview(`${j.result.url}?t=${Date.now()}`);
       updatePreviewStale();
       setProgress(`Preview ready — ${fmtSec(j.result.duration)} (rendered in ${j.elapsed}s)`, 1);
@@ -888,6 +1048,7 @@ $("#btnCancel").addEventListener("click", () => {
 
 /* ---------------------------------------------------------------- projects */
 function loadProject(project, path) {
+  bulk_sel.ids.clear(); bulk_sel.anchor = null;
   state.project = project;
   const given = project.settings || {};
   state.project.settings = {};
@@ -1126,6 +1287,474 @@ $("#bulkAdd").addEventListener("click", () => {
   toast(`Added ${scenes.length} scenes. Click Generate narration when you're ready.`);
 });
 
+/* ---------------------------------------------------------------- scene images (ChatGPT via Codex) */
+const ig = { status: null, modalIndex: null, attempts: [], chosen: null, job: null, bulk: null };
+const IG = () => S().imagegen;
+
+async function refreshImageStatus(force = false) {
+  const box = $("#igStatus");
+  try {
+    ig.status = await api(`/api/imagegen/status${force ? "?force=true" : ""}`);
+  } catch (e) { ig.status = { ready: false, message: e.message }; }
+  box.classList.toggle("ok", ig.status.ready);
+  box.classList.toggle("bad", !ig.status.ready);
+  $("#igStatusText").textContent = ig.status.ready ? `Connected — ${ig.status.message}` : ig.status.message;
+  return ig.status;
+}
+$("#btnIgCheck").addEventListener("click", () => { refreshImageStatus(true); loadImageModels(true); });
+
+async function loadImageModels(force = false) {
+  const sel = $("#igModel");
+  try {
+    const r = await api(`/api/imagegen/models${force ? "?force=true" : ""}`);
+    sel.innerHTML = `<option value="">Codex default${r.default ? ` (${escapeHtml(r.default)})` : ""}</option>` +
+      r.models.map((m) => `<option value="${escapeHtml(m.slug)}">${escapeHtml(m.name)}</option>`).join("");
+    sel.value = r.chosen || "";
+    sel.disabled = !r.models.length;
+  } catch { sel.disabled = true; }
+}
+$("#igModel").addEventListener("change", async (e) => {
+  try {
+    const r = await api("/api/imagegen/model", { model: e.target.value });
+    const name = e.target.selectedOptions[0]?.textContent || "Codex default";
+    toast(r.chosen ? `Scene images will use ${name}.` : "Scene images will use the Codex default model.");
+  } catch (err) { showMessage("Could not change the model", err.message); loadImageModels(); }
+});
+
+
+/* Characters + art style shared by every project ("series style", saved in series_style.json). */
+let SERIES = { characters: [] };
+let seriesTimer = null;
+function saveSeries() {
+  clearTimeout(seriesTimer);
+  seriesTimer = setTimeout(() => api("/api/series_style", SERIES).catch((e) => toast("Could not save the art style: " + e.message)), 400);
+}
+async function loadSeries() {
+  try { SERIES = await api("/api/series_style"); } catch { /* keep defaults */ }
+  renderSeries();
+}
+
+function refThumb(path, onRemove) {
+  const d = document.createElement("div");
+  d.className = "ig-ref";
+  d.innerHTML = `<img src="${imgUrl(path)}" alt=""><button title="Remove">✕</button>`;
+  d.querySelector("button").onclick = onRemove;
+  return d;
+}
+
+function renderSeries() {
+  const list = $("#igCharacters");
+  list.innerHTML = "";
+  if (!SERIES.characters.length) list.innerHTML = `<div class="muted small">No characters yet. Add your main character with one or two pictures of how they look.</div>`;
+  SERIES.characters.forEach((c, ci) => {
+    const el = document.createElement("div");
+    el.className = "ig-char" + (c.main ? " main" : "");
+    el.innerHTML = `<div class="ig-char-imgs"></div>
+      <div class="ig-char-fields">
+        <input class="c-name" placeholder="Name, e.g. Mr. Sidequest" spellcheck="false">
+        <input class="c-desc" placeholder="Look, e.g. stickman, round white head, green hoodie, brown cap">
+        <label class="toggle"><input type="checkbox" class="c-main"> Main character (in every scene)</label>
+      </div>
+      <button class="icon-btn" title="Remove this character">✕</button>`;
+    const imgs = el.querySelector(".ig-char-imgs");
+    c.images.forEach((p, ii) => imgs.appendChild(refThumb(p, () => { c.images.splice(ii, 1); saveSeries(); renderSeries(); })));
+    if (c.images.length < 2) {
+      const add = document.createElement("label");
+      add.className = "ig-ref-add"; add.title = "Add a picture of this character";
+      add.innerHTML = `+<input type="file" accept=".png,.jpg,.jpeg,.webp" multiple hidden>`;
+      add.querySelector("input").onchange = async (e) => {
+        try { const up = await uploadFiles(e.target.files); c.images = [...c.images, ...up.map((u) => u.path)].slice(0, 2); saveSeries(); renderSeries(); }
+        catch (err) { showMessage("Could not add the picture", err.message); }
+      };
+      imgs.appendChild(add);
+    }
+    const name = el.querySelector(".c-name"), desc = el.querySelector(".c-desc"), main = el.querySelector(".c-main");
+    name.value = c.name; desc.value = c.description; main.checked = !!c.main;
+    name.oninput = () => { c.name = name.value; saveSeries(); };
+    desc.oninput = () => { c.description = desc.value; saveSeries(); };
+    main.onchange = () => { SERIES.characters.forEach((o) => { o.main = o === c ? main.checked : false; }); saveSeries(); renderSeries(); };
+    el.querySelector(".icon-btn").onclick = () => { SERIES.characters.splice(ci, 1); saveSeries(); renderSeries(); };
+    list.appendChild(el);
+  });
+}
+/* Art style = the images in the artstyle folder (+ optional artstyle/rules.txt). */
+let ART = { images: [], rules: [], style: "", avoid: "", folder: "" };
+async function loadArtStyle() {
+  try { ART = await api("/api/artstyle"); } catch { /* keep the last known state */ }
+  const box = $("#artThumbs");
+  box.innerHTML = "";
+  ART.images.slice(0, 8).forEach((p) => {
+    const d = document.createElement("div");
+    d.className = "ig-ref";
+    d.innerHTML = `<img src="${imgUrl(p)}" alt="" title="${p.split(/[\\/]/).pop().replace(/"/g, "")}">`;
+    box.appendChild(d);
+  });
+  if (ART.images.length > 8) box.insertAdjacentHTML("beforeend", `<div class="more">+${ART.images.length - 8}</div>`);
+  const n = ART.images.length;
+  $("#artInfo").innerHTML = (n
+    ? `<b>${n}</b> style image${n === 1 ? "" : "s"} in the <b>artstyle</b> folder — up to 3 are sent with each image, rotating through all of them.`
+    : `No images yet. Put a few images with the look you want into the <b>artstyle</b> folder (<b>Open folder</b>), then <b>Refresh</b>.`) +
+    (ART.rules.length ? ` · ${ART.rules.length} rule${ART.rules.length === 1 ? "" : "s"} from rules.txt.` : " · Optional: add rules in artstyle\\rules.txt.");
+  if (ig.modalIndex !== null && !$("#imgModal").hidden) updateImagePromptPreview();
+}
+$("#btnArtRefresh").addEventListener("click", loadArtStyle);
+$("#btnArtOpen").addEventListener("click", () => api("/api/artstyle/open", {}));
+window.addEventListener("focus", loadArtStyle);   // pick up images added in Explorer when you come back
+
+/* Up to `max` folder images for scene i, rotating so every image in the folder gets used. */
+function styleExamples(i, max) {
+  const imgs = ART.images;
+  if (imgs.length <= max) return imgs.slice();
+  const start = (i * max) % imgs.length;
+  return Array.from({ length: max }, (_, k) => imgs[(start + k) % imgs.length]);
+}
+
+$("#btnAddCharacter").addEventListener("click", () => {
+  SERIES.characters.push({ id: uid(), name: "", description: "", main: !SERIES.characters.some((c) => c.main), images: [] });
+  saveSeries(); renderSeries();
+  $("#igCharacters").lastElementChild?.querySelector(".c-name")?.focus();
+});
+
+function defaultScenePrompt(sc) {
+  return (sc.image_prompt || "").trim() || `Illustrate this moment of the story:\n${(sc.script || "").trim()}`;
+}
+
+const usableCharacters = () => SERIES.characters.filter((c) => (c.name || "").trim() || c.images.length);
+function nameMentioned(text, name) {
+  const t = ` ${text.toLowerCase()} `;
+  if (name && t.includes(name.toLowerCase())) return true;
+  return (name || "").split(/\s+/).some((w) => w.replace(/\W/g, "").length > 3 && new RegExp(`\\b${w.replace(/\W/g, "")}\\b`, "i").test(t));
+}
+/* Which characters appear: a per-scene choice if the user made one, else main + names in the narration. */
+function sceneCharacters(i, promptText) {
+  const sc = state.project.scenes[i], chars = usableCharacters();
+  if (Array.isArray(sc.image_characters)) return chars.filter((c) => sc.image_characters.includes(c.id));
+  const text = `${promptText ?? ""} ${sc.script || ""}`;
+  return chars.filter((c) => c.main || nameMentioned(text, c.name));
+}
+
+/* The attached images, in order, with a line explaining each one to ChatGPT. */
+function referencePlan(i, promptText) {
+  const files = [], lines = [];
+  const add = (paths, describe) => {
+    const ok = paths.filter((p) => p && !state.missing.has(p)).slice(0, 8 - files.length);
+    if (!ok.length) return;
+    const a = files.length + 1, b = files.length + ok.length;
+    files.push(...ok);
+    lines.push(`${a === b ? `Image ${a}` : `Images ${a}–${b}`}: ${describe}`);
+  };
+  const prev = state.project.scenes[i - 1];
+  const continuity = IG().continuity !== false && prev && prev.image && !state.missing.has(prev.image);
+  add(styleExamples(i, continuity ? 2 : 3), "ART STYLE examples. Copy this exact drawing style — line work, character proportions, " +
+    "colors, shading and overall vibe. The new image must look like it comes from the same series.");
+  // The previous scene always gets a slot: the new image continues directly from it.
+  if (continuity) add([prev.image], `the PREVIOUS SCENE (scene ${i}). It may show what the main character was looking at rather than where they are. ` +
+    "Use it ONLY for continuity of the place, layout and lighting, and of which people are present. Do NOT copy how people " +
+    "look from it: every person's design must come from the ART STYLE examples and character references, even if the " +
+    "previous image drew someone differently. Do NOT copy its camera angle, distance, framing, composition or poses: " +
+    "this image is a completely new shot of the next moment.");
+  for (const c of sceneCharacters(i, promptText).slice(0, 3)) {
+    const nm = (c.name || "the main character").trim();
+    add(c.images.slice(0, 2), `the character "${nm}"${c.description ? ` (${c.description.trim()})` : ""}. Draw ${nm} exactly like this: same design, body shape, clothes and colors.`);
+  }
+  return { files, lines };
+}
+
+/* ---- camera shots: every scene is a NEW shot of the story (like the next cut in a film) ---- */
+const SHOTS = {
+  establishing: ["Wide establishing", "WIDE ESTABLISHING SHOT: show the whole place from a distance so the viewer understands where we are; characters are small in the frame."],
+  medium: ["Medium", "MEDIUM SHOT: characters from the waist up, clearly showing what they are doing."],
+  closeup: ["Close-up reaction", "CLOSE-UP: tight on a character's face and upper body. Show the emotion in the series' simple style — eyebrows, a small mouth shape and body language — never a huge open mouth or an exaggerated face."],
+  ots: ["Over the shoulder", "OVER-THE-SHOULDER SHOT: from behind the main character's shoulder (partly visible in the foreground), looking at what they see; that subject is sharp and in focus."],
+  pov: ["Point of view", "POINT-OF-VIEW SHOT: exactly what \"you\" see, filling the frame; the main character is not visible (at most their hands)."],
+  action: ["Action", "ACTION SHOT: show the action clearly, characters caught mid-movement, camera slightly tilted; simple motion lines at most."],
+  low: ["Low angle", "LOW-ANGLE SHOT: camera low, looking up at the characters."],
+  high: ["High angle", "HIGH-ANGLE SHOT: camera above looking down, showing the layout of the place and the characters smaller."],
+  detail: ["Detail / insert", "DETAIL SHOT: a close view of the important object or small action from the narration."],
+};
+const SHOT_ROTATION = ["medium", "low", "closeup", "high", "ots", "action", "detail", "establishing", "pov"];
+const SHOT_CUES = [
+  ["ots", /\b(notic\w*|see|saw|seeing|spot\w*|look\w* (at|out|through|up)|watch\w*|star(e|ed|ing)|glanc\w*|through the window|outside)\b/],
+  ["action", /\b(run|ran|running|sprint\w*|swing|swung|jump\w*|punch\w*|kick\w*|tackl\w*|fight\w*|chas\w*|throw\w*|threw|crash\w*|slam\w*|grab\w*|dodg\w*|fall\w*|fell|smash\w*|charg\w*|attack\w*|knock\w*|flying)\b/],
+  ["closeup", /\b(realiz\w*|feel|felt|think|thought|panic\w*|scream\w*|shock\w*|fear|scared|terrified|regret\w*|smil\w*|laugh\w*|cr(y|ied)|sigh\w*|wonder\w*|froze|freez\w*|heart|gulp\w*)\b/],
+  ["detail", /\b(phone|screen|note|keys?|sign|basket|noodles?|box|clock|wallet|receipt|label|bottle|can)\b/],
+];
+
+/* Shot for every scene up to i: the user's choice, else a cue from the narration, else the rotation —
+   never the same as the scene before. */
+function sceneShots(upTo) {
+  const scenes = state.project.scenes, shots = [];
+  for (let k = 0; k <= upTo && k < scenes.length; k++) {
+    const sc = scenes[k], text = (sc.image_prompt || sc.script || "").toLowerCase();
+    let shot = SHOTS[sc.shot] ? sc.shot : null;
+    if (!shot) {
+      shot = k === 0 ? "establishing" : (SHOT_CUES.find(([, re]) => re.test(text)) || [])[0] || SHOT_ROTATION[k % SHOT_ROTATION.length];
+      if (k > 0 && shot === shots[k - 1]) {
+        const alt = { ots: "pov", pov: "ots", action: "low", closeup: "medium" }[shot];
+        shot = alt && alt !== shots[k - 1] ? alt : SHOT_ROTATION.find((s) => s !== shots[k - 1] && s !== shot);
+      }
+    }
+    shots.push(shot);
+  }
+  return shots;
+}
+const sceneShot = (i) => sceneShots(i)[i];
+
+/* The narration of the scenes before this one (most recent kept in full), so each image continues the story. */
+function storySoFar(i, limit = 1800) {
+  const before = state.project.scenes.slice(0, i).map((s, k) => `Scene ${k + 1}: ${(s.script || "").replace(/\s+/g, " ").trim()}`)
+    .filter((l) => !/: $/.test(l));
+  const kept = [];
+  let size = 0;
+  for (let k = before.length - 1; k >= 0; k--) {
+    if (size + before[k].length > limit && kept.length) { kept.unshift("(earlier scenes omitted)"); break; }
+    kept.unshift(before[k]);
+    size += before[k].length;
+  }
+  return kept.join("\n");
+}
+
+function fullImagePrompt(i, scenePrompt) {
+  const chars = sceneCharacters(i, scenePrompt), main = chars.find((c) => c.main);
+  const plan = referencePlan(i, scenePrompt);
+  const total = state.project.scenes.length;
+  const shots = sceneShots(i), shot = shots[i], prevShot = shots[i - 1];
+  const parts = [`Create one illustration: scene ${i + 1} of ${total} of an animated story. The scenes form one continuous story, ` +
+    "and each scene is a NEW SHOT — like the next panel of a comic or the next cut in a film — so viewers always see something new."];
+  if (ART.style) parts.push(`ART STYLE: ${ART.style}`);
+  if (ART.rules.length) parts.push(`EXTRA RULES (always follow):\n${ART.rules.map((r) => `- ${r}`).join("\n")}`);
+  if (plan.lines.length) parts.push(`REFERENCE IMAGES (attached, in this order):\n${plan.lines.map((l) => `- ${l}`).join("\n")}`);
+  if (chars.length) {
+    parts.push(`CHARACTERS WHO CAN APPEAR (draw them as in their reference images):\n${chars.map((c) => `- ${(c.name || "Main character").trim()}${c.description ? `: ${c.description.trim()}` : ""}`).join("\n")}` +
+      (main ? `\nThe story is told in the second person: "you" is ${(main.name || "the main character").trim()}.` : ""));
+  }
+  parts.push("SAME DESIGN FOR EVERYONE: every person in the image — including extras, crowds, victims and people in the " +
+    "background — is drawn with exactly the same simple character design as the style examples and character references. " +
+    "Never give anyone a different, more realistic or more detailed design (no normal skin-colored realistic faces) unless " +
+    "the EXTRA RULES say otherwise for them (for example zombies).");
+  const story = IG().continuity !== false ? storySoFar(i) : "";
+  if (story) parts.push(`STORY SO FAR (already shown in earlier images, for context only):\n${story}`);
+  parts.push(`THIS SCENE (draw this moment):\n${scenePrompt.trim()}`);
+  parts.push(`CAMERA SHOT: ${SHOTS[shot][1]}` + (prevShot ? ` The previous scene was a ${SHOTS[prevShot][0].toLowerCase()} shot; ` +
+    "this one must look clearly different — new camera angle, distance and framing, and new poses that match the action." : ""));
+  parts.push("STYLE LOCK: the camera shot changes only the framing (angle and distance). Keep the art style, colors and lighting " +
+    "exactly as described in ART STYLE and shown in the style examples — no dramatic lighting, glow, blur or extra detail.");
+  parts.push("WHERE EVERYONE IS: keep every character where the story puts them. If the previous image showed something the " +
+    "main character was watching (for example through a window or from a distance), the main character is still where they " +
+    "were watching from — not out there — unless the narration says they moved.");
+  parts.push("FOCUS: make the main subject of THIS SCENE's narration the center of attention (for example the event being noticed, " +
+    "or the action happening). The main character does not have to be in the middle of the frame, and may be only partly " +
+    "visible or not visible at all when the shot calls for it.");
+  parts.push("COMPOSITION: exactly 16:9 widescreen (1672x941), not 3:2. Keep the important action inside the frame with a little margin.");
+  const never = [(ART.avoid || "").trim(), IG().no_text ? "any text, letters, captions, speech bubbles, logos or watermarks" : ""].filter(Boolean);
+  if (never.length) parts.push(`NEVER DRAW: ${never.join("; ")}.`);
+  return parts.join("\n\n");
+}
+const sceneReferences = (i, promptText) => referencePlan(i, promptText).files;
+
+/* Start one generation and resolve with the new image path. */
+async function runImageJob(i, scenePrompt, onStage) {
+  const job = await api("/api/imagegen/jobs", { prompt: fullImagePrompt(i, scenePrompt), landscape: true,   // always 16:9
+    references: sceneReferences(i, scenePrompt) });
+  ig.job = job;
+  try {
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const j = await api(`/api/imagegen/jobs/${job.id}`);
+      if (onStage) onStage(j);
+      if (j.state === "done") return j.result.path;
+      if (j.state === "cancelled") throw Object.assign(new Error("Stopped."), { cancelled: true });
+      if (j.state === "error") throw new Error(j.error || "Image generation failed.");
+    }
+  } finally { ig.job = null; }
+}
+
+function setSceneImage(sc, path, note) {
+  const before = { image: sc.image, image_name: sc.image_name };
+  sc.image = path;
+  sc.image_name = "ChatGPT image";
+  state.missing.delete(path);
+  markDirty(); renderScenes();
+  if (note) toast(note, "Undo", () => { Object.assign(sc, before); markDirty(); renderScenes(); }, 10000);
+}
+
+function openImageModal(i) {
+  const sc = state.project.scenes[i];
+  ig.modalIndex = i; ig.attempts = []; ig.chosen = null;
+  $("#imgTitle").textContent = `Scene ${i + 1} image`;
+  $("#imgCurrent").innerHTML = sc.image && !state.missing.has(sc.image) ? `<img src="${imgUrl(sc.image)}" alt="">` : `<span class="muted small">No image yet</span>`;
+  $("#imgNew").innerHTML = `<span class="muted small">Click Generate</span>`;
+  $("#imgAttempts").innerHTML = "";
+  $("#imgPrompt").value = defaultScenePrompt(sc);
+  $("#imgUse").disabled = true;
+  $("#imgGenerate").textContent = "🎨 Generate";
+  setImageBusy(false);
+  renderShotPicker();
+  renderImageChars();
+  updateImagePromptPreview();
+  $("#imgModal").hidden = false;
+  if (!ig.status?.ready) $("#imgStatusLine").textContent = ig.status ? `⚠ ${ig.status.message}` : "";
+}
+
+function renderShotPicker() {
+  const i = ig.modalIndex, sc = state.project.scenes[i], sel = $("#imgShot");
+  const auto = (() => { const keep = sc.shot; sc.shot = null; const s = sceneShot(i); sc.shot = keep; return s; })();
+  sel.innerHTML = `<option value="">Auto — ${SHOTS[auto][0]}</option>` +
+    Object.entries(SHOTS).map(([k, [label]]) => `<option value="${k}">${label}</option>`).join("");
+  sel.value = SHOTS[sc.shot] ? sc.shot : "";
+}
+$("#imgShot").addEventListener("change", (e) => {
+  const sc = state.project.scenes[ig.modalIndex];
+  sc.shot = e.target.value || null;
+  markDirty();
+  updateImagePromptPreview();
+});
+
+function renderImageChars() {
+  const i = ig.modalIndex, box = $("#imgChars"), chars = usableCharacters();
+  $("#imgCharsField").hidden = !chars.length;
+  box.innerHTML = "";
+  const active = new Set(sceneCharacters(i, $("#imgPrompt").value).map((c) => c.id));
+  chars.forEach((c) => {
+    const l = document.createElement("label");
+    l.className = "toggle";
+    l.innerHTML = `<input type="checkbox"> ${(c.name || "Unnamed character").replace(/</g, "&lt;")}${c.main ? " (main)" : ""}`;
+    const cb = l.querySelector("input");
+    cb.checked = active.has(c.id);
+    cb.onchange = () => {
+      const sc = state.project.scenes[i];
+      const now = new Set(sceneCharacters(i, $("#imgPrompt").value).map((x) => x.id));
+      if (cb.checked) now.add(c.id); else now.delete(c.id);
+      sc.image_characters = [...now];
+      markDirty();
+      updateImagePromptPreview();
+    };
+    box.appendChild(l);
+  });
+}
+
+function updateImagePromptPreview() {
+  if (ig.modalIndex === null) return;
+  const text = $("#imgPrompt").value || "";
+  $("#imgFullPrompt").textContent = fullImagePrompt(ig.modalIndex, text);
+  const plan = referencePlan(ig.modalIndex, text);
+  const box = $("#imgRefsUsed");
+  box.innerHTML = "";
+  plan.files.forEach((p, n) => {
+    const f = document.createElement("figure");
+    f.innerHTML = `<img src="${imgUrl(p)}" alt=""><figcaption>Image ${n + 1}</figcaption>`;
+    box.appendChild(f);
+  });
+  $("#imgRefNote").textContent = plan.files.length
+    ? `${plan.files.length} reference image${plan.files.length === 1 ? "" : "s"} attached — each one is explained in the prompt.`
+    : "Tip: add style examples and your characters in Settings → Scene images so ChatGPT matches your series.";
+}
+$("#imgPrompt").addEventListener("input", updateImagePromptPreview);
+
+function setImageBusy(busy, text) {
+  $("#imgProgress").hidden = !busy;
+  $("#imgCancel").hidden = !busy;
+  $("#imgGenerate").disabled = busy;
+  if (text) $("#imgProgressText").textContent = text;
+  $("#imgStatusLine").textContent = busy ? "You can close this window; generation continues." : "";
+}
+
+function showAttempt(path) {
+  ig.chosen = path;
+  $("#imgNew").innerHTML = `<img src="${imgUrl(path)}" alt="">`;
+  $("#imgUse").disabled = false;
+  document.querySelectorAll("#imgAttempts img").forEach((im) => im.classList.toggle("active", im.dataset.path === path));
+}
+
+$("#imgGenerate").addEventListener("click", async () => {
+  const i = ig.modalIndex, sc = state.project.scenes[i];
+  const prompt = $("#imgPrompt").value.trim();
+  if (!prompt) { toast("Describe what to draw first."); return; }
+  sc.image_prompt = prompt; markDirty();
+  const t0 = Date.now();
+  const tick = setInterval(() => $("#imgProgressText").textContent = `Generating with ChatGPT… ${Math.round((Date.now() - t0) / 1000)} s`, 1000);
+  setImageBusy(true, "Starting…");
+  markSceneGenerating(sc.id, true);
+  try {
+    const path = await runImageJob(i, prompt);
+    ig.attempts.push(path);
+    const im = document.createElement("img");
+    im.src = imgUrl(path); im.dataset.path = path; im.title = "Use this version";
+    im.onclick = () => showAttempt(path);
+    $("#imgAttempts").appendChild(im);
+    if (!$("#imgModal").hidden && ig.modalIndex === i) showAttempt(path);
+    else setSceneImage(sc, path, `Scene ${i + 1}: new image applied.`);   // window was closed: apply directly
+    $("#imgGenerate").textContent = "🎨 Generate again";
+  } catch (e) {
+    if (!e.cancelled) showMessage("Image generation failed", e.message);
+  } finally {
+    clearInterval(tick);
+    setImageBusy(false);
+    markSceneGenerating(sc.id, false);
+  }
+});
+$("#imgCancel").addEventListener("click", () => { if (ig.job) api(`/api/imagegen/jobs/${ig.job.id}/cancel`, {}); });
+$("#imgUse").addEventListener("click", () => {
+  const sc = state.project.scenes[ig.modalIndex];
+  if (!ig.chosen || !sc) return;
+  setSceneImage(sc, ig.chosen, `Scene ${ig.modalIndex + 1}: new image applied.`);
+  $("#imgModal").hidden = true;
+  ig.modalIndex = null;
+});
+
+function markSceneGenerating(id, on) {
+  const btn = document.querySelector(`.scene[data-id="${id}"] .act-image`);
+  if (btn) { btn.classList.toggle("busy-gen", on); btn.textContent = on ? "🎨 Generating…" : "🎨 Image"; }
+}
+
+/* "Generate [N] missing": fill the first N scenes that have no (or a missing) image, one after another. */
+try { const saved = localStorage.getItem("storycraft.genCount"); if (saved) $("#genCount").value = saved; } catch { /* default 5 */ }
+$("#genCount").addEventListener("change", (e) => { try { localStorage.setItem("storycraft.genCount", e.target.value); } catch { /* ignore */ } });
+$("#btnGenMissing").addEventListener("click", async () => {
+  const btn = $("#btnGenMissing");
+  if (ig.bulk) { ig.bulk.stop = true; if (ig.job) api(`/api/imagegen/jobs/${ig.job.id}/cancel`, {}); return; }
+  const count = $("#genCount").value;
+  const all = state.project.scenes.filter((s) => !s.image || state.missing.has(s.image));
+  const todo = count === "all" ? all : all.slice(0, +count);   // the first N without an image, in story order
+  if (!todo.length) { toast("Every scene already has an image. Use 🎨 Image on a scene to replace one."); return; }
+  if ((await refreshImageStatus()).ready === false) { showMessage("ChatGPT isn't connected", ig.status.message); return; }
+  if (todo.some((s) => !(s.script || "").trim() && !(s.image_prompt || "").trim())) {
+    showMessage("Some scenes have no narration", "Add narration (or an image prompt) to every scene first, so ChatGPT knows what to draw."); return;
+  }
+  ig.bulk = { stop: false };
+  $("#genCount").disabled = true;
+  let done = 0;
+  try {
+    for (const sc of todo) {
+      if (ig.bulk.stop) break;
+      const i = state.project.scenes.indexOf(sc);
+      if (i < 0) continue;
+      btn.textContent = `■ Stop (${done + 1}/${todo.length})`;
+      setProgress(`Generating image for scene ${i + 1} (${done + 1} of ${todo.length})…`, done / todo.length);
+      markSceneGenerating(sc.id, true);
+      try {
+        const path = await runImageJob(i, defaultScenePrompt(sc));
+        setSceneImage(sc, path);
+        done++;
+      } finally { markSceneGenerating(sc.id, false); }
+    }
+    setProgress(ig.bulk.stop ? `Stopped after ${done} image${done === 1 ? "" : "s"}.` : `Generated ${done} image${done === 1 ? "" : "s"}.`, 1);
+  } catch (e) {
+    const n = `${done} image${done === 1 ? "" : "s"}`;
+    if (e.cancelled) setProgress(`Stopped after ${n}.`, 0);
+    else {
+      showMessage("Image generation failed", `${e.message}
+
+${n} ${done === 1 ? "was" : "were"} generated before this.`);
+      setProgress(`Generated ${n}.`, 0);
+    }
+  } finally {
+    ig.bulk = null;
+    $("#genCount").disabled = false;
+    btn.textContent = "🎨 Generate";
+  }
+});
+
 /* ---------------------------------------------------------------- full script import */
 const fullScript = { result: null, parts: [], titles: [], boundaries: [], edited: new Set() };
 const BOUNDARY_LABEL = { paragraph: "paragraph break", sentence: "sentence break", clause: "splits a sentence at a comma",
@@ -1190,13 +1819,36 @@ $("#btnAutoAssign").addEventListener("click", () => {
 
 function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]); }
 
+/* "Scenes 1–10" from [0..9] */
+function sceneRanges(idx) {
+  const out = [];
+  for (let k = 0; k < idx.length; k++) {
+    let j = k;
+    while (j + 1 < idx.length && idx[j + 1] === idx[j] + 1) j++;
+    out.push(j > k ? `${idx[k] + 1}–${idx[j] + 1}` : `${idx[k] + 1}`);
+    k = j;
+  }
+  return out.join(", ");
+}
+
 function renderAssignments() {
   const box = $("#assignList");
   const scenes = state.project.scenes, parts = fullScript.parts, r = fullScript.result;
   const scroll = box.scrollTop;
   box.innerHTML = "";
+  const kept = parts.map((p, i) => (p === null ? i : -1)).filter((i) => i >= 0);
+  if (kept.length) {
+    const note = document.createElement("div");
+    note.className = "assign-note";
+    const noScript = kept.filter((i) => !(scenes[i]?.script || "").trim());
+    note.textContent = `Scene${kept.length === 1 ? "" : "s"} ${sceneRanges(kept)} ${kept.length === 1 ? "isn't" : "aren't"} in this script, so ` +
+      `${kept.length === 1 ? "it stays" : "they stay"} exactly as ${kept.length === 1 ? "it is" : "they are"}.` +
+      (noScript.length ? ` (Scene ${sceneRanges(noScript)} still ${noScript.length === 1 ? "has" : "have"} no narration.)` : "");
+    box.appendChild(note);
+  }
   parts.forEach((text, i) => {
-    if (i > 0) {
+    if (text === null) return;                          // kept scene: not shown, not changed
+    if (i > 0 && parts[i - 1] !== null) {
       const b = document.createElement("div");
       b.className = "boundary";
       const kind = fullScript.boundaries[i - 1];
@@ -1229,8 +1881,9 @@ function renderAssignments() {
   });
   box.scrollTop = scroll;
   updateWordCheck();
-  const n = Math.min(parts.length, scenes.length), extra = Math.max(0, parts.length - scenes.length);
-  $("#btnApplyScript").textContent = `Apply to ${n} scene${n === 1 ? "" : "s"}${extra ? ` + add ${extra} new` : ""}`;
+  const n = parts.filter((p, i) => p !== null && i < scenes.length).length, extra = Math.max(0, parts.length - scenes.length);
+  $("#btnApplyScript").textContent = n && extra ? `Update ${n} scene${n === 1 ? "" : "s"} + add ${extra} new`
+    : extra ? `Add ${extra} new scene${extra === 1 ? "" : "s"}` : `Apply to ${n} scene${n === 1 ? "" : "s"}`;
 }
 
 function nudge(i, dir) {
@@ -1241,7 +1894,7 @@ function nudge(i, dir) {
 
 function updateWordCheck() {
   const orig = ScriptSplit.words(fullScript.result.analysis.body);
-  const now = ScriptSplit.words(fullScript.parts.join(" "));
+  const now = ScriptSplit.words(fullScript.parts.filter((p) => p !== null).join(" "));
   const same = orig.length === now.length && orig.every((w, k) => w === now[k]);
   $("#wordCheck").textContent = same
     ? `✓ All ${orig.length} words assigned exactly once, in the original order.`
@@ -1249,18 +1902,21 @@ function updateWordCheck() {
 }
 
 $("#btnApplyScript").addEventListener("click", async () => {
-  const scenes = state.project.scenes, parts = fullScript.parts.map((p) => p.trim());
-  const overwrite = scenes.filter((sc, i) => i < parts.length && (sc.script || "").trim() && sc.script.trim() !== parts[i]).length;
+  const scenes = state.project.scenes, parts = fullScript.parts.map((p) => (p === null ? null : p.trim()));
+  const overwrite = scenes.filter((sc, i) => i < parts.length && parts[i] !== null && (sc.script || "").trim() && sc.script.trim() !== parts[i]).length;
   if (overwrite && !(await confirmBox("Replace existing narration?",
     `${overwrite} scene${overwrite === 1 ? " already has" : "s already have"} narration that will be replaced.\nYou can undo this right after applying.`, "Replace narration"))) return;
   const backup = { scripts: scenes.map((sc) => ({ id: sc.id, script: sc.script })), count: scenes.length };
+  let changed = 0, added = 0;
   parts.forEach((p, i) => {
-    if (i < scenes.length) scenes[i].script = p;
-    else scenes.push({ id: uid(), image: "", image_name: "", script: p, motion: "default" });
+    if (p === null) return;                                  // not in this script: keep as is
+    if (i < scenes.length) { scenes[i].script = p; changed++; }
+    else { scenes.push({ id: uid(), image: "", image_name: "", script: p, motion: "default" }); added++; }
   });
   $("#scriptModal").hidden = true;
   markDirty(); renderScenes();
-  toast(`Narration assigned to ${parts.length} scenes. Click Generate narration when ready.`, "Undo", () => {
+  const what = [changed ? `updated ${changed} scene${changed === 1 ? "" : "s"}` : "", added ? `added ${added} new scene${added === 1 ? "" : "s"}` : ""].filter(Boolean).join(" and ");
+  toast(`Script imported: ${what}. Click Generate narration when ready.`, "Undo", () => {
     state.project.scenes.length = backup.count;
     backup.scripts.forEach((b) => { const sc = state.project.scenes.find((s) => s.id === b.id); if (sc) sc.script = b.script; });
     markDirty(); renderScenes();
@@ -1359,6 +2015,10 @@ async function boot() {
   if (problems.length) showSetup(problems);
   fillStaticOptions();
   bindSettings();
+  refreshImageStatus();
+  loadImageModels();
+  loadSeries();
+  loadArtStyle();
   refreshCacheInfo();
   let saved = null;
   // "sidequest.autosave" is the key used before the rename to StoryCraft.

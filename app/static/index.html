@@ -30,8 +30,23 @@
         <span id="totalDuration" class="muted"></span>
         <button class="btn primary-soft" id="btnFullScript">📝 Import full script</button>
         <button class="btn" id="btnBulk">Bulk import</button>
+        <span class="gen-group" title="Generate images with ChatGPT for scenes that have none, in story order">
+          <button class="btn" id="btnGenMissing">🎨 Generate</button>
+          <select id="genCount" class="sm" aria-label="How many images">
+            <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5" selected>5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10">10</option><option value="all">all</option>
+          </select>
+          <span class="gen-label">missing</span>
+        </span>
         <button class="btn" id="btnAddEmpty">+ Empty scene</button>
       </div>
+    </div>
+    <div id="bulkBar" class="bulk-bar" hidden>
+      <span id="bulkCount">0 selected</span>
+      <button class="btn sm ghost" id="bulkSelectAll">Select all</button>
+      <button class="btn sm ghost" id="bulkClear">Clear</button>
+      <span class="spacer"></span>
+      <button class="btn sm" id="bulkRemoveImages" title="Keep the scenes and narration, remove only their images">🖼 Remove images</button>
+      <button class="btn sm danger" id="bulkDelete">🗑 Delete scenes</button>
     </div>
     <div id="sceneList" class="scene-list"></div>
     <label class="dropzone" id="dropzone">
@@ -58,6 +73,12 @@
         <video id="previewVideo" controls playsinline hidden></video>
       </div>
       </div>
+      <div class="scene-stepper">
+        <button class="icon-btn" id="btnPrevScene" title="Previous scene">◀</button>
+        <span id="sceneStepLabel">Scene 1</span>
+        <span id="capStepLabel" class="cap-step"></span>
+        <button class="icon-btn" id="btnNextScene" title="Next scene">▶</button>
+      </div>
       <div class="poster-hint" id="posterHint"></div>
       <div class="preview-tools">
         <button class="cc-toggle" id="btnSubToggle" role="switch" aria-checked="true" title="Show or hide subtitles in the preview and export">
@@ -81,6 +102,31 @@
           <button class="btn" id="btnTestVoice">▶ Test voice</button>
           <span class="muted small">Uses your local Kokoro install.</span>
         </div>
+      </details>
+
+      <details open>
+        <summary>Scene images (ChatGPT)</summary>
+        <div class="ig-status" id="igStatus"><span class="ig-dot"></span><span id="igStatusText">Checking ChatGPT connection…</span>
+          <button class="btn sm" id="btnIgCheck">Check again</button></div>
+        <div class="field"><label>Model <span class="hint">the ChatGPT model Codex uses for scene images</span></label>
+          <select id="igModel"><option value="">Codex default</option></select></div>
+        <div class="sub-group">
+          <div class="sub-group-head"><span>Art style</span>
+            <span class="row"><button class="btn sm" id="btnArtRefresh" title="Check the folder again">Refresh</button>
+            <button class="btn sm" id="btnArtOpen" title="Open the artstyle folder">Open folder</button></span></div>
+          <div class="ig-refs" id="artThumbs"></div>
+          <p class="muted small" id="artInfo">Checking the artstyle folder…</p>
+        </div>
+        <div class="sub-group">
+          <div class="sub-group-head"><span>Characters</span><button class="btn sm" id="btnAddCharacter">+ Add character</button></div>
+          <div id="igCharacters" class="ig-chars"></div>
+          <p class="muted small">The <b>main character</b> is in every scene (the "you" of the story). Others are added when the
+            narration mentions their name; you can change this per scene.</p>
+        </div>
+        <label class="toggle"><input type="checkbox" id="igNoText"> No text, captions or speech bubbles in images</label>
+        <label class="toggle"><input type="checkbox" id="igUsePrev"> Continue from the previous scene (story so far + its image)</label>
+        <p class="muted small">Images are always made in 16:9. In a 9:16 video they're shown whole with black bars, leaving room for a title.</p>
+        <p class="muted small">Uses your ChatGPT plan through the Codex app (no API key). About a minute per image.</p>
       </details>
 
       <details open>
@@ -297,6 +343,38 @@
   </div>
 </div>
 
+<!-- Scene image generation -->
+<div class="modal" id="imgModal" hidden>
+  <div class="modal-card wide">
+    <div class="modal-head"><h3 id="imgTitle">Scene image</h3><button class="icon-btn" data-close>✕</button></div>
+    <div class="img-grid">
+      <div class="img-compare">
+        <figure><figcaption>Current</figcaption><div class="img-frame" id="imgCurrent"></div></figure>
+        <figure><figcaption>New</figcaption><div class="img-frame" id="imgNew"><span class="muted small">Click Generate</span></div></figure>
+        <div class="img-attempts" id="imgAttempts"></div>
+      </div>
+      <div class="img-side">
+        <div class="field"><label>What to draw <span class="hint">starts from this scene's narration — edit freely</span></label>
+          <textarea id="imgPrompt" rows="9" spellcheck="true"></textarea></div>
+        <details class="img-full"><summary>Full prompt sent to ChatGPT</summary><pre id="imgFullPrompt"></pre></details>
+        <div class="field"><label>Camera shot <span class="hint">changes every scene so images don't repeat</span></label>
+          <select id="imgShot"></select></div>
+        <div class="field" id="imgCharsField"><label>Characters who can appear</label><div class="img-chars" id="imgChars"></div></div>
+        <div class="img-refs-used" id="imgRefsUsed"></div>
+        <p class="muted small" id="imgRefNote"></p>
+        <div class="img-progress" id="imgProgress" hidden><span class="spinner"></span><span id="imgProgressText">Generating…</span></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="muted small" id="imgStatusLine"></span>
+      <div class="spacer"></div>
+      <button class="btn ghost" id="imgCancel" hidden>Stop</button>
+      <button class="btn" id="imgGenerate">🎨 Generate</button>
+      <button class="btn primary" id="imgUse" disabled>Use this image</button>
+    </div>
+  </div>
+</div>
+
 <!-- Messages -->
 <div class="modal" id="msgModal" hidden>
   <div class="modal-card">
@@ -313,6 +391,7 @@
 <template id="sceneTpl">
   <article class="scene">
     <div class="scene-index">
+      <input type="checkbox" class="bulk-check" title="Select (Shift+click to select a range)">
       <span class="handle" title="Drag to reorder">⋮⋮</span>
       <span class="num"></span>
     </div>
@@ -320,12 +399,14 @@
       <img alt="">
       <div class="thumb-empty">Drop image<br>or click</div>
       <div class="thumb-missing">⚠ Image missing<br><u>Locate…</u></div>
+      <button class="thumb-remove" title="Remove image (keeps the narration)">✕</button>
     </div>
     <div class="scene-body">
       <div class="scene-meta"><span class="filename"></span><span class="stats muted"></span></div>
       <textarea class="script" rows="4" placeholder="Narration for this scene. It is spoken by Kokoro and used for the subtitles."></textarea>
       <div class="scene-controls">
         <button class="btn sm act-play" title="Hear this scene's narration">▶ Narration</button>
+        <button class="btn sm act-image" title="Generate this scene's image with ChatGPT">🎨 Image</button>
         <select class="motion sm" title="Camera movement for this scene"></select>
         <span class="duration" title="Scene length (from the generated narration)">—</span>
         <span class="scene-icons">

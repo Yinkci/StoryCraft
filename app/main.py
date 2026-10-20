@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import threading
@@ -15,9 +16,9 @@ from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import dialogs
+from . import dialogs, imagegen
 from . import config as config_module
-from .config import CONFIG, MEDIA_DIR, PROJECTS_DIR, ROOT, WORKSPACE
+from .config import ARTSTYLE_DIR, CONFIG, MEDIA_DIR, PROJECTS_DIR, ROOT, WORKSPACE
 from .render import (AUDIO_DIR, DEFAULT_SETTINGS, MOTIONS, PREVIEW_DIR, Job, RenderError,
                      build_timeline, cache_info, cleanup_cache, clear_video_cache, merged_settings,
                      narrate, render, scene_summary, trim_segments)
@@ -261,6 +262,186 @@ def cache_clear():
         raise HTTPException(409, "Wait for the current task to finish before clearing the cache.")
     clear_video_cache()
     return cache_info()
+
+
+# ---- series style: characters + art style shared by all projects -----------------------------------
+SERIES_FILE = ROOT / "series_style.json"
+RECOMMENDED_STYLE = 'Flat 2D webcomic style, like animated storytelling channels on YouTube. Simple shapes and clean dark outlines of even thickness. Flat colors with at most one soft shadow tone; no gradients, textures or glossy highlights. Muted, slightly desaturated natural palette (greys, greens, browns, dusty blues). Plain, even lighting (overcast daylight or ordinary indoor light). Simple backgrounds in the same flat style, everything in focus. Characters are simple cartoon people with round heads, small dot eyes, simple eyebrows and small mouths, wearing plain clothes; emotions are shown with eyebrows, small mouth shapes and body language, never with exaggerated anime faces. Calm, readable poses.'
+RECOMMENDED_AVOID = 'realistic humans, photorealism, photographs, 3D render, anime or manga style, painterly or highly detailed rendering, cinematic or dramatic lighting, glowing light sources, light rays, lens flare, bokeh, depth-of-field blur, rain or wet reflections, neon, oversaturated colors, detailed textures, exaggerated anime faces or huge open screaming mouths'
+DEFAULT_SERIES = {"style": RECOMMENDED_STYLE, "avoid": RECOMMENDED_AVOID,
+                  "style_images": [], "characters": []}
+
+
+def _fix_paths(paths):
+    out = []
+    for p in paths or []:
+        if p and Path(p).is_file():
+            out.append(p)
+        elif relink(p):
+            out.append(relink(p))
+    return out
+
+
+# ---- art style folder: every image in artstyle/ is a style example; artstyle/rules.txt adds rules ----
+ART_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+def _migrate_style_settings():
+    """One time: earlier versions kept the art style in settings. Move custom rules into rules.txt and
+    old style example images into the folder, so nothing is lost."""
+    if not SERIES_FILE.exists():
+        return
+    try:
+        data = json.loads(SERIES_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if data.get("style_migrated"):
+        return
+    rules = ARTSTYLE_DIR / "rules.txt"
+    lines = []
+    style = (data.get("style") or "").strip()
+    if style and style != RECOMMENDED_STYLE:
+        for sentence in re.findall(r"[^.!?]+[.!?]?", style):
+            sentence = sentence.strip()
+            if sentence and sentence not in RECOMMENDED_STYLE and "follow the style of the character" not in sentence.lower():
+                lines.append(sentence)
+    known = {x.strip().lower() for x in RECOMMENDED_AVOID.split(",")} | {"detailed realistic faces"}
+    extra = [x.strip() for x in re.split(r"[,;]", data.get("avoid") or "") if x.strip() and x.strip().lower() not in known]
+    if extra:
+        lines.append("Never draw: " + ", ".join(extra) + ".")
+    if lines and not rules.exists():
+        rules.write_text("# Extra rules added to every image prompt (one per line). Lines starting with # are ignored.\n"
+                         + "\n".join(lines) + "\n", encoding="utf-8")
+    if not any(p.suffix.lower() in ART_TYPES for p in ARTSTYLE_DIR.iterdir()):
+        for p in _fix_paths(data.get("style_images")):
+            shutil.copy2(p, ARTSTYLE_DIR / Path(p).name)
+    data["style_migrated"] = True
+    SERIES_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+@app.get("/api/artstyle")
+def artstyle():
+    _migrate_style_settings()
+    images = sorted((p for p in ARTSTYLE_DIR.iterdir() if p.is_file() and p.suffix.lower() in ART_TYPES),
+                    key=lambda p: [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", p.name)])
+    rules_file = ARTSTYLE_DIR / "rules.txt"
+    rules = rules_file.read_text(encoding="utf-8", errors="replace") if rules_file.exists() else ""
+    return {"folder": str(ARTSTYLE_DIR), "images": [str(p) for p in images],
+            "rules": [l.strip() for l in rules.splitlines() if l.strip() and not l.strip().startswith("#")],
+            "style": RECOMMENDED_STYLE, "avoid": RECOMMENDED_AVOID}
+
+
+@app.post("/api/artstyle/open")
+def artstyle_open():
+    os.startfile(str(ARTSTYLE_DIR))
+    return {"ok": True}
+
+
+@app.get("/api/series_style/recommended")
+def recommended_series_style():
+    return {"style": RECOMMENDED_STYLE, "avoid": RECOMMENDED_AVOID}
+
+
+@app.get("/api/series_style")
+def get_series_style():
+    data = dict(DEFAULT_SERIES)
+    if SERIES_FILE.exists():
+        try:
+            data.update(json.loads(SERIES_FILE.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            pass
+    data["style_images"] = _fix_paths(data.get("style_images"))
+    for c in data.get("characters", []):
+        c["images"] = _fix_paths(c.get("images"))
+    return data
+
+
+@app.post("/api/series_style")
+def save_series_style(body: dict):
+    clean = {"style": str(body.get("style", ""))[:4000], "avoid": str(body.get("avoid", ""))[:2000],
+             "style_images": [str(p) for p in body.get("style_images", [])][:4], "characters": [],
+             "style_migrated": bool(body.get("style_migrated", True))}
+    for c in body.get("characters", [])[:8]:
+        clean["characters"].append({"id": str(c.get("id", ""))[:40], "name": str(c.get("name", ""))[:80],
+                                    "description": str(c.get("description", ""))[:600], "main": bool(c.get("main")),
+                                    "images": [str(p) for p in c.get("images", [])][:2]})
+    tmp = SERIES_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(clean, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(SERIES_FILE)
+    return {"ok": True}
+
+
+# ---- scene images with ChatGPT (Codex CLI signed in with ChatGPT) ----------------------------------
+image_jobs = {}
+image_current = {"job": None}
+
+
+@app.get("/api/imagegen/models")
+def imagegen_models(force: bool = False):
+    available = imagegen.models(force=force)
+    return {"models": available, "chosen": imagegen.chosen_model() or "",
+            "default": available[0]["name"] if available else ""}
+
+
+@app.post("/api/imagegen/model")
+def imagegen_set_model(body: dict):
+    slug = str(body.get("model") or "")
+    if slug and not any(m["slug"] == slug for m in imagegen.models()):
+        raise HTTPException(400, "That model isn't offered by your Codex.")
+    CONFIG["image_model"] = slug
+    config_module.save(CONFIG)
+    return {"chosen": slug}
+
+
+@app.get("/api/imagegen/status")
+def imagegen_status(force: bool = False):
+    s = imagegen.status(force=force)
+    return {k: s[k] for k in ("ready", "version", "message")}
+
+
+def _run_image_job(job, body):
+    try:
+        job.update("Starting Codex…", 0.05)
+        path = imagegen.generate(body.get("prompt", ""), bool(body.get("landscape")), body.get("references") or [],
+                                 cancelled=job.cancelled, on_progress=lambda m: job.update(m, 0.3))
+        job.result = {"path": path, "name": Path(path).name}
+        job.update("Done", 1.0)
+        job.state = "done"
+    except imagegen.Cancelled:
+        job.state, job.stage = "cancelled", "Cancelled"
+    except imagegen.ImageError as e:
+        job.state, job.error = "error", str(e)
+    except Exception as e:
+        traceback.print_exc()
+        job.state, job.error = "error", f"{type(e).__name__}: {e}"
+
+
+@app.post("/api/imagegen/jobs")
+def imagegen_start(body: dict):
+    if not (body.get("prompt") or "").strip():
+        raise HTTPException(400, "The image prompt is empty.")
+    running = image_current["job"]
+    if running and running.state == "running":
+        raise HTTPException(409, "Another image is still being generated. Wait for it or cancel it.")
+    job = Job("image")
+    image_jobs[job.id] = job
+    image_current["job"] = job
+    threading.Thread(target=_run_image_job, args=(job, body), daemon=True).start()
+    return job.to_dict()
+
+
+@app.get("/api/imagegen/jobs/{job_id}")
+def imagegen_job(job_id: str):
+    if job_id not in image_jobs:
+        raise HTTPException(404, "Unknown image job")
+    return image_jobs[job_id].to_dict()
+
+
+@app.post("/api/imagegen/jobs/{job_id}/cancel")
+def imagegen_cancel(job_id: str):
+    if job_id in image_jobs:
+        image_jobs[job_id].cancel()
+    return {"ok": True}
 
 
 @app.get("/api/preview/{name}")

@@ -26,7 +26,7 @@ from .config import CONFIG, EXPORTS_DIR, WORKSPACE
 from .tts import SAMPLE_RATE, Cancelled
 from .captions import title_has_text, write_ass
 
-SEGMENT_VERSION = 2
+SEGMENT_VERSION = 3
 CANVAS_SCALE = 3                     # zoom/pan on a 3x canvas so movement is sub-pixel smooth
 MOTIONS = ["static", "zoom_in", "zoom_out", "pan_left", "pan_right", "random"]
 INTENSITY = {"subtle": 0.07, "medium": 0.12, "strong": 0.18}
@@ -47,6 +47,7 @@ DEFAULT_SETTINGS = {
                   "outline_color": "#000000", "outline": 6, "shadow": 2, "bold": True,
                   "uppercase": False, "position": 26, "position_x": 50, "max_width": 84,
                   "words_per_caption": 5},
+    "imagegen": {"style": "", "no_text": True, "references": [], "continuity": True},
     "title": {"enabled": False, "lines": [{"text": "", "size": 90}], "font": "Impact", "color": "#FFFFFF",
               "highlight": "#FF8A1F", "outline": 4, "outline_color": "#000000", "shadow": 2, "bold": False,
               "uppercase": True, "position_x": 50, "position_y": 5, "duration": 0},
@@ -279,47 +280,33 @@ def _contain_box(size, cw, ch, scale=1.0):
     return (cw - bw) // 2, (ch - bh) // 2, bw, bh
 
 
-def contain_plan(motion, size, cw, ch, r, frames, allow_zoom_fallback):
-    """Canvas + zoompan settings for contain mode that keep the ENTIRE image in view at every frame.
-
-    Moving shots shrink the image slightly inside the black canvas (by 1/(1+r)), so even fully
-    zoomed in the view still holds the whole picture. Pans only travel through real free space;
-    if there isn't enough, the scene falls back to a gentle zoom (random) or no movement."""
-    p = f"(on/{max(frames - 1, 1)})"
-    if motion in ("zoom_in", "zoom_out", "pan_left", "pan_right"):
-        m = 0.995 / (1 + r)
-        bx, by, bw, bh = _contain_box(size, cw, ch, m)
-        if motion in ("pan_left", "pan_right"):
-            z = 1 + r / 2
-            vw, vh = cw / z, ch / z
-            lo, hi = max(0.0, bx + bw - vw), min(float(bx), cw - vw)
-            ylo, yhi = max(0.0, by + bh - vh), min(float(by), ch - vh)
-            if hi - lo >= 0.01 * cw and yhi >= ylo and vw >= bw and vh >= bh:
-                y = min(max(by + bh / 2 - vh / 2, ylo), yhi)
-                start, end = (hi, lo) if motion == "pan_left" else (lo, hi)
-                return (bx, by, bw, bh), str(z), f"{start:.2f}+({end - start:.2f})*{p}", f"{y:.2f}", motion
-            if not allow_zoom_fallback:
-                return _contain_box(size, cw, ch), "1", "0", "0", "static"
-            motion = "zoom_in"
-        z = f"1+{r}*{p}" if motion == "zoom_in" else f"{1 + r}-{r}*{p}"
-        return (bx, by, bw, bh), z, "(iw-iw/zoom)/2", "(ih-ih/zoom)/2", motion
-    return _contain_box(size, cw, ch), "1", "0", "0", "static"
-
-
 def segment_filter(motion, frames, width, height, fps, fit, intensity, size=None, allow_zoom_fallback=False):
     """Returns (filter_graph, effective_motion)."""
     cw, ch = width * CANVAS_SCALE, height * CANVAS_SCALE
     r = INTENSITY.get(intensity, INTENSITY["subtle"])
-    if fit == "contain":
-        (bx, by, bw, bh), z, x, y, motion = contain_plan(motion, size, cw, ch, r, frames, allow_zoom_fallback)
-        canvas = (f"[0:v]scale={bw}:{bh}:flags=lanczos,setsar=1,format=rgb24,"
-                  f"pad={cw}:{ch}:{bx}:{by}:color=black[c]")
-        return (f"{canvas};[c]zoompan=z='{z}':x='{x}':y='{y}':d={frames}:s={width}x{height}:fps={fps},"
-                f"scale=out_range=tv,format=yuv420p[v]"), motion
-    canvas = (f"[0:v]scale={cw}:{ch}:force_original_aspect_ratio=increase:flags=lanczos,"
-              f"crop={cw}:{ch},setsar=1[c]")
     p = f"(on/{max(frames - 1, 1)})"
     cx, cy = "(iw-iw/zoom)/2", "(ih-ih/zoom)/2"
+    if fit == "contain":
+        # The picture sits at a FIXED place on the black background (edges never move); the camera
+        # moves inside the picture. During a move a thin band at its edges is briefly out of view
+        # (zoom: up to r, pan: r + 1%); zoom-in starts and zoom-out ends on the whole picture.
+        bx, by, bw, bh = _contain_box(size, width, height)
+        sw, sh = bw * CANVAS_SCALE, bh * CANVAS_SCALE          # draw the moves on a 3x copy: sub-pixel smooth
+        if motion == "zoom_in":
+            z, x, y = f"1+{r}*{p}", cx, cy
+        elif motion == "zoom_out":
+            z, x, y = f"{1 + r}-{r}*{p}", cx, cy
+        elif motion == "pan_left":
+            z, x, y = f"{1 + r + 0.01}", f"(iw-iw/zoom)*(1-{p})", cy
+        elif motion == "pan_right":
+            z, x, y = f"{1 + r + 0.01}", f"(iw-iw/zoom)*{p}", cy
+        else:
+            motion, z, x, y = "static", "1", "0", "0"
+        return (f"[0:v]scale={sw}:{sh}:flags=lanczos,setsar=1,format=rgb24[c];"
+                f"[c]zoompan=z='{z}':x='{x}':y='{y}':d={frames}:s={bw}x{bh}:fps={fps},"
+                f"pad={width}:{height}:{bx}:{by}:color=black,scale=out_range=tv,format=yuv420p[v]"), motion
+    canvas = (f"[0:v]scale={cw}:{ch}:force_original_aspect_ratio=increase:flags=lanczos,"
+              f"crop={cw}:{ch},setsar=1[c]")
     if motion == "zoom_in":
         z, x, y = f"1+{r}*{p}", cx, cy
     elif motion == "zoom_out":

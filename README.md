@@ -53,6 +53,7 @@ Kokoro speak again; editing a sentence only re-speaks that sentence.
 | **Python 3.10 or newer** | [python.org/downloads](https://www.python.org/downloads/) (keep the default options; tkinter is included) |
 | **Kokoro**, installed in that Python | Either kind works, see below |
 | **FFmpeg** | In a terminal: `winget install Gyan.FFmpeg` |
+| **Codex** (optional, for scene images) | ChatGPT Codex app or `npm i -g @openai/codex`, then `codex login` → *Sign in with ChatGPT* |
 | **Git** (to download / update) | [git-scm.com](https://git-scm.com/), or use GitHub's *Download ZIP* button |
 
 **Kokoro**: StoryCraft uses the Kokoro you already have. It does not download its own.
@@ -155,6 +156,25 @@ your original files are never changed.
 - **Subtitles**: on/off (**CC** switch under the preview), font, size, color, outline, shadow,
   bold, UPPERCASE, words per caption, and position: X, Y and caption width. You can also drag the
   caption on the preview. **✥ Adjust positions** lets you drag it on a still frame after rendering.
+- **Scene images (ChatGPT)**: generate a scene's picture with your ChatGPT plan. **🎨 Image** on a
+  scene opens a window with a prompt based on that scene's narration (edit it freely), **Generate**,
+  then **Use this image** (Undo available). **🎨 Generate missing images** fills every scene that has
+  no image, one after another. To keep your series' look:
+  - **Art style = the `artstyle` folder**: put images with the look you want into the `artstyle`
+    folder in StoryCraft's folder (*Settings → Scene images → Open folder*). Your best existing scenes
+    work well. Up to 3 are sent with every image, rotating through all of them. Optionally add
+    `artstyle\rules.txt` with your own rules, one per line (e.g. *Any blood is drawn bright pink.*).
+    A flat 2D webcomic style description and a *never draw* list (no anime, no realistic humans,
+    no dramatic lighting…) are built in. Images and rules in the folder stay on your PC; they're not
+    uploaded to GitHub.
+  - **Characters**: each with a name, one or two pictures and a short description of their look.
+    The **main character** is in every scene (the "you" of the story). Others are included when the
+    narration mentions their name, and you can tick or untick them per scene in the image window.
+  - Every attached picture is labeled in the prompt (style example / which character), so ChatGPT
+    knows what to copy. Characters are saved once for **all your projects** (`series_style.json`). This uses the **Codex app / Codex CLI signed in with
+  your ChatGPT account**: no API key, and it counts against your plan's Codex limits. About a minute
+  per image. Setup: install the ChatGPT Codex app (or `npm i -g @openai/codex`), run `codex login`,
+  and choose *Sign in with ChatGPT*. The section shows *Connected* when it's ready.
 - **Title text**: a headline at the top of the video (e.g. *ZOMBIE OUTBREAK: … PART 2*). It can
   have several lines, each with its own size. Wrap words in `*asterisks*` to give them the highlight
   color. It's centered at the top by default; move it with X / Y or drag it on the preview. Font,
@@ -165,7 +185,10 @@ your original files are never changed.
   opacity, font, color and outline are adjustable.
 - **Motion & transitions**: static, slow zoom in/out, slow pan left/right, or random subtle movement
   (per scene or for all). Fit mode is *Contain*: the whole image is shown with black bars if
-  needed, never cropped or stretched. *Cover* fills the frame and crops. Transitions: cut,
+  needed, never stretched. The picture stays fixed in place and the **camera moves inside it**, like a
+  Ken Burns move. During a move a thin band at the picture's edges is briefly out of view (up to
+  about 7–8%). A zoom-in starts on the whole picture and a zoom-out ends on it. *Cover* fills the
+  frame and crops. Transitions: cut,
   crossfade or fade through black. They always happen in the pause between scenes, so speech is
   never cut off.
 - **Timing**: pause between scenes, pause between sentences, lead-in, hold at the end.

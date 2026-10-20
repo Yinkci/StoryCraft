@@ -199,24 +199,21 @@ const ScriptSplit = (() => {
       const unique = new Set(nums).size === nums.length;
       const ordered = nums.every((v, i) => i === 0 || v > nums[i - 1]);
       let parts, titles;
+      // Only labeled scenes change. Unlabeled ones are null = "keep as it is", so a script with
+      // SCENE 11 and SCENE 12 simply adds those two scenes and leaves scenes 1–10 alone.
       if (unique && ordered && nums[0] >= 1) {
         const size = Math.max(sceneCount, nums[nums.length - 1]);
-        parts = Array(size).fill(""); titles = Array(size).fill("");
+        parts = Array(size).fill(null); titles = Array(size).fill("");
         a.sections.forEach((s) => { parts[s.number - 1] = s.text; titles[s.number - 1] = s.title; });
-        const missing = [];
-        for (let i = 0; i < size; i++) if (!nums.includes(i + 1)) missing.push(i + 1);
-        if (missing.length) warnings.push(`No narration labeled for scene ${missing.join(", ")}.`);
+        for (let i = sceneCount; i < size; i++) if (parts[i] === null) parts[i] = "";   // a gap in new scenes
       } else {
         parts = a.sections.map((s) => s.text); titles = a.sections.map((s) => s.title);
         warnings.push("Scene numbers are repeated or out of order, so sections were assigned top to bottom.");
-        while (parts.length < sceneCount) { parts.push(""); titles.push(""); }
+        while (parts.length < sceneCount) { parts.push(null); titles.push(""); }
       }
-      if (a.sections.length !== sceneCount) {
-        warnings.unshift(`The script has ${a.sections.length} labeled scene${a.sections.length === 1 ? "" : "s"} but the project has ${sceneCount} image${sceneCount === 1 ? "" : "s"}.`);
-      }
-      if (parts.length > sceneCount) warnings.push(`${parts.length - sceneCount} extra scene${parts.length - sceneCount === 1 ? "" : "s"} will be added without an image.`);
+      const added = parts.length - sceneCount;
+      if (added > 0) warnings.push(`${added} new scene${added === 1 ? "" : "s"} (${sceneCount + 1}${added > 1 ? `–${parts.length}` : ""}) will be added without an image — use 🎨 Generate missing to make ${added === 1 ? "its image" : "their images"}.`);
       if (a.preamble) warnings.push(`Text before the first scene label is not assigned: “${a.preamble.slice(0, 80)}${a.preamble.length > 80 ? "…" : ""}”`);
-      parts.forEach((p, i) => { if (!p.trim() && i < sceneCount) { /* reported via missing list */ } });
       return { mode: "labeled", parts, titles, boundaries: [], warnings, analysis: a };
     }
     if (sceneCount < 1) return { mode: "continuous", parts: [], titles: [], boundaries: [], warnings: ["Add your scene images first — the script is divided across them."], analysis: a };

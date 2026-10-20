@@ -17,8 +17,9 @@ MEDIA_DIR = ROOT / "media"            # copies of uploaded images (originals are
 WORKSPACE = ROOT / "workspace"        # caches, temporary job folders, previews
 PROJECTS_DIR = ROOT / "projects"
 EXPORTS_DIR = ROOT / "exports"
+ARTSTYLE_DIR = ROOT / "artstyle"      # images here = the art style for generated scene images
 
-for d in (MEDIA_DIR, WORKSPACE, PROJECTS_DIR, EXPORTS_DIR):
+for d in (MEDIA_DIR, WORKSPACE, PROJECTS_DIR, EXPORTS_DIR, ARTSTYLE_DIR):
     d.mkdir(exist_ok=True)
 
 HOME = Path.home()
