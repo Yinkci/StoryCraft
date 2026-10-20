@@ -3,7 +3,6 @@
 config.json
 python_path.txt
 series_style.json
-artstyle/*
 !artstyle/README.txt
 
 # Your own work: images, projects, videos (created when you use the app)

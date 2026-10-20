@@ -1,0 +1,7 @@
+# Extra rules added to every image prompt (one per line). Lines starting with # are ignored.
+Cartoon action and fighting are fine: punching, kicking, grabbing, tackling, chasing and zombies attacking people.
+No gore: no open wounds, exposed flesh, bones, severed body parts or pools of blood.
+Any blood is drawn bright pink, cartoon-style, and only a little of it.
+Stickman character should all have white skin color, while zombies will have pale skin color with veins showing
+Never draw: gore, open wounds, severed body parts, red blood.
+Anyone who attacks, grabs, chases or bites people is a zombie and looks like one from their very first appearance: pale grey skin with dark veins showing, sunken tired eyes, torn and dirty clothes, stiff hunched posture.
