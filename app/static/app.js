@@ -1443,16 +1443,22 @@ function referencePlan(i, promptText) {
     files.push(...ok);
     lines.push(`${a === b ? `Image ${a}` : `Images ${a}–${b}`}: ${describe}`);
   };
-  const prev = state.project.scenes[i - 1];
-  const continuity = IG().continuity !== false && prev && prev.image && !state.missing.has(prev.image);
+  const ok = (sc) => sc && sc.image && !state.missing.has(sc.image);
+  const prev = state.project.scenes[i - 1], prev2 = state.project.scenes[i - 2];
+  const continuity = IG().continuity !== false && ok(prev);
   add(styleExamples(i, continuity ? 2 : 3), "ART STYLE examples. Copy this exact drawing style — line work, character proportions, " +
     "colors, shading and overall vibe. The new image must look like it comes from the same series.");
-  // The previous scene always gets a slot: the new image continues directly from it.
-  if (continuity) add([prev.image], `the PREVIOUS SCENE (scene ${i}). It may show what the main character was looking at rather than where they are. ` +
-    "Use it ONLY for continuity of the place, layout and lighting, and of which people are present. Do NOT copy how people " +
-    "look from it: every person's design must come from the ART STYLE examples and character references, even if the " +
-    "previous image drew someone differently. Do NOT copy its camera angle, distance, framing, composition or poses: " +
-    "this image is a completely new shot of the next moment.");
+  // The two previous scenes: the place, and how each person who already appeared looks. Two, because the
+  // last shot may be a close-up (a phone, a face) that doesn't show everyone.
+  if (continuity) {
+    const earlier = IG().continuity !== false && ok(prev2) ? [prev2.image] : [];
+    add([...earlier, prev.image], `the PREVIOUS SCENE${earlier.length ? "S" : ""} (scene ${earlier.length ? `${i - 1} and ` : ""}${i}). ` +
+      "They may show what the main character was looking at rather than where they are. Use them for continuity of the " +
+      "place, layout and lighting, and to keep every person who already appeared looking THE SAME: same hairstyle, clothes, " +
+      "accessories and colors (unless the narration says they changed). The basic body design always comes from the ART STYLE " +
+      "examples (if an earlier image drew someone in a different style, use the series style for them). Do NOT copy their " +
+      "camera angle, distance, framing, composition or poses: this image is a completely new shot of the next moment.");
+  }
   for (const c of sceneCharacters(i, promptText).slice(0, 3)) {
     const nm = (c.name || "the main character").trim();
     add(c.images.slice(0, 2), `the character "${nm}"${c.description ? ` (${c.description.trim()})` : ""}. Draw ${nm} exactly like this: same design, body shape, clothes and colors.`);
@@ -1502,17 +1508,58 @@ const sceneShot = (i) => sceneShots(i)[i];
 
 /* The narration of the scenes before this one (most recent kept in full), so each image continues the story. */
 function storySoFar(i, limit = 1800) {
-  const before = state.project.scenes.slice(0, i).map((s, k) => `Scene ${k + 1}: ${(s.script || "").replace(/\s+/g, " ").trim()}`)
-    .filter((l) => !/: $/.test(l));
+  const lines = state.project.scenes.slice(0, i).map((s, k) => `Scene ${k + 1}: ${(s.script || "").replace(/\s+/g, " ").trim()}`);
+  const before = lines.map((l, k) => [k, l]).filter(([, l]) => !/: $/.test(l));
+  if (!before.length) return "";
+  // The opening sets time and place, so it is always kept; then as many recent scenes as fit.
+  const [first, ...rest] = before;
   const kept = [];
-  let size = 0;
-  for (let k = before.length - 1; k >= 0; k--) {
-    if (size + before[k].length > limit && kept.length) { kept.unshift("(earlier scenes omitted)"); break; }
-    kept.unshift(before[k]);
-    size += before[k].length;
+  let size = first[1].length;
+  for (let k = rest.length - 1; k >= 0; k--) {
+    if (size + rest[k][1].length > limit) break;
+    kept.unshift(rest[k]);
+    size += rest[k][1].length;
   }
-  return kept.join("\n");
+  const out = [first[1]];
+  if (kept.length && kept[0][0] > first[0] + 1) out.push("(scenes in between omitted)");
+  else if (!kept.length && rest.length) out.push("(scenes in between omitted)");
+  return [...out, ...kept.map(([, l]) => l)].join("\n");
 }
+
+/* ---- time of day: the latest time clue in the narration up to this scene ---- */
+const TIME_LOOKS = {
+  night: "night: dark sky, street lights and lit windows on, no daylight",
+  "late night": "late night: dark sky, street lights on, very few people around, no daylight",
+  evening: "evening: dusk, deep blue sky turning dark, street lights coming on",
+  morning: "morning: early daylight, soft morning light",
+  afternoon: "afternoon: bright daylight",
+  day: "daytime: daylight",
+};
+function timeOfDay(i) {
+  let found = null;
+  state.project.scenes.slice(0, i + 1).forEach((sc, k) => {
+    const t = (sc.script || "").toLowerCase();
+    const clock = [...t.matchAll(/\b(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)/g)].pop();
+    let label = null, said = null;
+    if (clock) {
+      const h = +clock[1] % 12, pm = clock[3].startsWith("p");
+      label = pm ? (h >= 5 ? "night" : "afternoon") : (h < 5 ? "late night" : "morning");
+      if (pm && h >= 5 && h < 7) label = "evening";
+      said = clock[0].toUpperCase().replace(/\./g, "");
+    }
+    const word = [...t.matchAll(/\b(midnight|tonight|night|nighttime|evening|dusk|sunset|dawn|sunrise|morning|noon|afternoon|daylight|daytime|the next day)\b/g)].pop();
+    if (word && (!clock || word.index > clock.index)) {
+      const w = word[1];
+      label = { midnight: "late night", tonight: "night", night: "night", nighttime: "night", evening: "evening", dusk: "evening",
+        sunset: "evening", dawn: "morning", sunrise: "morning", morning: "morning", noon: "day", afternoon: "afternoon",
+        daylight: "day", daytime: "day", "the next day": "day" }[w];
+      said = w;
+    }
+    if (label) found = { label, said, scene: k + 1 };
+  });
+  return found;
+}
+
 
 function fullImagePrompt(i, scenePrompt) {
   const chars = sceneCharacters(i, scenePrompt), main = chars.find((c) => c.main);
@@ -1531,9 +1578,16 @@ function fullImagePrompt(i, scenePrompt) {
   parts.push("SAME DESIGN FOR EVERYONE: every person in the image — including extras, crowds, victims and people in the " +
     "background — is drawn with exactly the same simple character design as the style examples and character references. " +
     "Never give anyone a different, more realistic or more detailed design (no normal skin-colored realistic faces) unless " +
-    "the EXTRA RULES say otherwise for them (for example zombies).");
+    "the EXTRA RULES say otherwise for them (for example zombies). People who already appeared in earlier scenes keep exactly " +
+    "the same hairstyle, clothes, accessories and colors as before (see the previous scene images and STORY SO FAR).");
+  parts.push("ANATOMY: every person has exactly two arms, two hands and two legs — never an extra arm, hand or leg. Count them. " +
+    "Every hand must clearly belong to one of that person's two arms. If someone holds an injured arm, their other hand " +
+    "holds it, so they have no free hand left for anything else (don't also show them pushing a door or touching the counter).");
   const story = IG().continuity !== false ? storySoFar(i) : "";
   if (story) parts.push(`STORY SO FAR (already shown in earlier images, for context only):\n${story}`);
+  const tod = timeOfDay(i);
+  if (tod) parts.push(`TIME OF DAY: ${tod.label} (${tod.said}, from scene ${tod.scene}). Unless the narration says time has passed, ` +
+    `it is still ${tod.label}. Anything outdoors or seen through windows must look like ${TIME_LOOKS[tod.label]}.`);
   parts.push(`THIS SCENE (draw this moment):\n${scenePrompt.trim()}`);
   parts.push(`CAMERA SHOT: ${SHOTS[shot][1]}` + (prevShot ? ` The previous scene was a ${SHOTS[prevShot][0].toLowerCase()} shot; ` +
     "this one must look clearly different — new camera angle, distance and framing, and new poses that match the action." : ""));
@@ -1554,6 +1608,7 @@ const sceneReferences = (i, promptText) => referencePlan(i, promptText).files;
 
 /* Start one generation and resolve with the new image path. */
 async function runImageJob(i, scenePrompt, onStage) {
+  await loadArtStyle();     // re-read the artstyle folder and rules.txt right before every image
   const job = await api("/api/imagegen/jobs", { prompt: fullImagePrompt(i, scenePrompt), landscape: true,   // always 16:9
     references: sceneReferences(i, scenePrompt) });
   ig.job = job;
