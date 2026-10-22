@@ -26,6 +26,7 @@ from .tts import SAMPLE_RATE, Cancelled, Narrator
 
 STATIC = Path(__file__).resolve().parent / "static"
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
+AUDIO_TYPES = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".opus"}
 
 app = FastAPI(title="StoryCraft")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
@@ -529,6 +530,85 @@ def setup_locate(body: dict):
         raise HTTPException(400, "Unknown setup item")
     config_module.save(CONFIG)
     return {"ok": True}
+
+
+# ---- episodes: "continues from" a previous episode's project file -----------------------------------
+def _episode_name(path):
+    name = Path(path).name
+    for ext in (".storycraft.json", ".sidequest.json", ".json"):
+        if name.lower().endswith(ext):
+            return name[: -len(ext)]
+    return name
+
+
+# ---- background music ------------------------------------------------------------------------
+@app.post("/api/music/pick")
+def music_pick():
+    """Choose a music file; a copy is kept in media/ so the project still works if the original moves."""
+    path = dialogs.ask("open", title="Choose background music",
+                       filetypes=[["Audio", " ".join("*" + e for e in sorted(AUDIO_TYPES))]])
+    if not path:
+        return {"path": None}
+    src = Path(path)
+    if src.suffix.lower() not in AUDIO_TYPES:
+        raise HTTPException(400, "Choose an audio file: " + ", ".join(sorted(AUDIO_TYPES)))
+    data = src.read_bytes()
+    safe = re.sub(r"[^\w.\- ]", "_", src.name)
+    target = MEDIA_DIR / f"music_{hashlib.sha1(data).hexdigest()[:16]}_{safe}"
+    if not target.exists():
+        target.write_bytes(data)
+    return {"path": str(target), "name": src.name}
+
+
+@app.get("/api/music")
+def music_file(path: str):
+    p = Path(path)
+    if p.suffix.lower() not in AUDIO_TYPES or not p.is_file():
+        raise HTTPException(404, "Music file not found")
+    return FileResponse(p)
+
+
+@app.post("/api/episode/pick")
+def episode_pick(body: dict):
+    path = dialogs.ask("open", title="Choose the previous episode", initialdir=str(PROJECTS_DIR),
+                       filetypes=[["StoryCraft project", "*.json"]])
+    if not path:
+        return {"path": None}
+    if body.get("current") and Path(path).resolve() == Path(body["current"]).resolve():
+        raise HTTPException(400, "That's this episode itself. Choose the episode that comes before it.")
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        assert isinstance(data.get("scenes"), list)
+    except (OSError, ValueError, AssertionError):
+        raise HTTPException(400, "That file is not a StoryCraft project.")
+    return {"path": str(Path(path)), "name": _episode_name(path)}
+
+
+@app.post("/api/episode/context")
+def episode_context(body: dict):
+    """The previous episodes (newest first, up to 3 back, following each one's own "continues from"):
+    their narration and images, for continuity of story, place and time."""
+    chain, seen, path = [], set(), body.get("path")
+    while path and len(chain) < 3:
+        key = str(Path(path).resolve()).lower()
+        if key in seen:
+            break
+        seen.add(key)
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            if not chain:
+                raise HTTPException(404, f"The previous episode file was not found: {Path(path).name}")
+            break
+        scenes = []
+        for sc in data.get("scenes", []):
+            img = sc.get("image") or ""
+            if img and not Path(img).is_file():
+                img = relink(img) or ""
+            scenes.append({"script": sc.get("script") or "", "image": img})
+        chain.append({"name": _episode_name(path), "path": str(path), "scenes": scenes})
+        path = ((data.get("settings") or {}).get("story") or {}).get("continues_from") or ""
+    return {"chain": chain}
 
 
 @app.post("/api/dialog/folder")

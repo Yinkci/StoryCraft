@@ -48,12 +48,14 @@ DEFAULT_SETTINGS = {
                   "uppercase": False, "position": 26, "position_x": 50, "max_width": 84,
                   "words_per_caption": 5},
     "imagegen": {"style": "", "no_text": True, "references": [], "continuity": True},
+    "story": {"continues_from": ""},       # project file of the episode this one continues
     "title": {"enabled": False, "lines": [{"text": "", "size": 90, "offset": 0}], "line_spacing": 85, "font": "Impact", "color": "#FFFFFF",
               "highlight": "#FF8A1F", "outline": 4, "outline_color": "#000000", "shadow": 2, "bold": False,
               "uppercase": True, "position_x": 50, "position_y": 5, "duration": 0},
     "watermark": {"enabled": False, "text": "", "font": "Arial", "size": 40, "color": "#FFFFFF",
                   "opacity": 70, "outline": 2, "outline_color": "#000000", "shadow": 1, "bold": True,
                   "anchor": "br", "position_x": 96, "position_y": 96},
+    "music": {"enabled": False, "file": "", "name": "", "volume": 15, "duck": True, "fade_out": 2.0},
     "motion": {"default": "random", "intensity": "subtle", "fit": "contain"},
     "transition": {"type": "cut", "duration": 0.4},
     "export": {"output_dir": str(EXPORTS_DIR), "filename": "", "resolution": "1080x1920",
@@ -163,12 +165,16 @@ def validate(project):
         problems.append("Add at least one scene.")
     for i, scene in enumerate(scenes, 1):
         image = scene.get("image")
-        if not image:
-            problems.append(f"Scene {i} has no image.")
-        elif not Path(image).exists():
+        if image and not Path(image).exists():      # no image at all is fine: that scene is black
             problems.append(f"Scene {i}: image not found ({Path(image).name}). Use Replace to locate it.")
         if not (scene.get("script") or "").strip():
             problems.append(f"Scene {i} has no narration script.")
+    music = merged_settings(project)["music"]
+    if music["enabled"]:
+        if not music["file"]:
+            problems.append("Background music is on but no music file is chosen (Settings → Background music).")
+        elif not Path(music["file"]).is_file():
+            problems.append(f"Background music file not found ({Path(music['file']).name}). Choose it again.")
     if problems:
         raise RenderError("\n".join(problems))
 
@@ -324,6 +330,8 @@ def segment_filter(motion, frames, width, height, fps, fit, intensity, size=None
 def render_segment(image, motion, frames, width, height, fps, fit, intensity, preview, job,
                    allow_zoom_fallback=False):
     """Render (or reuse) one scene clip. Returns (path, movement actually used)."""
+    if not image:
+        return render_blank(frames, width, height, fps, preview, job), "static"
     st = Path(image).stat()
     fit = _fit_mode(fit)
     graph, used = segment_filter(motion, frames, width, height, fps, fit, intensity,
@@ -345,6 +353,43 @@ def render_segment(image, motion, frames, width, height, fps, fit, intensity, pr
     finally:
         tmp.unlink(missing_ok=True)
     return out, used
+
+
+def music_filters(nar, mus, music, total):
+    """Mix looping background music under the narration: set volume, lower it while the narrator
+    speaks (optional), fade it out at the end. Output label [aout], exactly as long as the video."""
+    fmt = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo"
+    vol = max(0.0, min(100.0, float(music["volume"]))) / 100
+    fade = max(0.0, min(float(music["fade_out"]), total))
+    parts = [f"[{nar}:a]{fmt},asplit=2[nar][key]" if music["duck"] else f"[{nar}:a]{fmt}[nar]",
+             f"[{mus}:a]{fmt},volume={vol:.3f}[m0]"]
+    last = "m0"
+    if music["duck"]:
+        parts.append(f"[m0][key]sidechaincompress=threshold=0.03:ratio=4:attack=30:release=600[m1]")
+        last = "m1"
+    if fade > 0:
+        parts.append(f"[{last}]afade=t=out:st={total - fade:.3f}:d={fade:.3f}[m2]")
+        last = "m2"
+    parts.append(f"[nar][{last}]amix=inputs=2:duration=first:normalize=0[aout]")
+    return parts
+
+
+def render_blank(frames, width, height, fps, preview, job):
+    """A black clip for a scene that has no image yet, so the video can be exported anyway."""
+    key = hashlib.sha1(json.dumps([SEGMENT_VERSION, "blank", frames, width, height, fps, preview]).encode())
+    out = SEGMENT_DIR / f"{key.hexdigest()[:24]}.mp4"
+    if out.exists():
+        out.touch()
+        return out
+    tmp = out.with_name(out.stem + ".part.mp4")
+    try:
+        run_ffmpeg(["-f", "lavfi", "-i", f"color=c=black:s={width}x{height}:r={fps}",
+                    "-frames:v", str(frames), "-an", "-c:v", "libx264", "-preset", "veryfast",
+                    "-pix_fmt", "yuv420p", "-color_range", "tv", str(tmp)], job)
+        tmp.replace(out)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return out
 
 
 # ---- full render -----------------------------------------------------------------------------
@@ -393,6 +438,10 @@ def render(project, narrator, job, preview):
         for clip in clips:
             args += ["-i", str(clip)]
         args += ["-i", "narration.wav"]
+        music = s["music"]
+        use_music = music["enabled"] and music["file"] and float(music["volume"]) > 0
+        if use_music:
+            args += ["-stream_loop", "-1", "-i", str(music["file"])]      # loops for the whole video
         parts = [f"[{i}:v]settb=AVTB,setpts=PTS-STARTPTS[v{i}]" for i in range(n)]
         if n == 1:
             last = "v0"
@@ -409,11 +458,15 @@ def render(project, narrator, job, preview):
                 last = f"x{i}"
         sub_filter = "ass=subs.ass," if burn else ""
         parts.append(f"[{last}]{sub_filter}scale=out_range=tv,format=yuv420p[out]")  # JPGs are full-range; output standard TV range
+        audio_map = f"{n}:a"
+        if use_music:
+            parts += music_filters(n, n + 1, music, tl["total"])
+            audio_map = "[aout]"
         if preview:
             preset, crf = "ultrafast", 26
         else:
             preset, crf = QUALITY.get(s["export"]["quality"], QUALITY["high"])
-        enc = ["-filter_complex", ";".join(parts), "-map", "[out]", "-map", f"{n}:a",
+        enc = ["-filter_complex", ";".join(parts), "-map", "[out]", "-map", audio_map,
                "-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-profile:v", "high",
                "-pix_fmt", "yuv420p", "-color_range", "tv", "-r", str(fps), "-c:a", "aac", "-b:a", "192k",
                "-ar", "48000", "-ac", "2", "-t", f"{tl['total']:.6f}", "-movflags", "+faststart"]

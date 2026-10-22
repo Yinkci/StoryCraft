@@ -316,8 +316,9 @@ function updateTotals() {
   $("#sceneCount").textContent = scenes.length ? `(${scenes.length})` : "";
   list.querySelectorAll(".scene").forEach((el, i) => updateSceneInfo(el, scenes[i], i));
   const ds = scenes.map((_, i) => sceneDuration(i));
-  $("#totalDuration").textContent = scenes.length && ds.every((d) => d !== null)
-    ? `Total ${fmtSec(ds.reduce((a, b) => a + b, 0))}` : "";
+  $("#totalDuration").textContent = !scenes.length ? ""
+    : ds.every((d) => d !== null) ? `Total ${fmtSec(ds.reduce((a, b) => a + b, 0))}`
+    : "Total: click 🎙 Generate narration";
 }
 
 async function addImagesAsScenes(files) {
@@ -383,6 +384,8 @@ const BIND = [
   ["wSize", "watermark", "size", "num"], ["wOpacity", "watermark", "opacity", "num"],
   ["wOutline", "watermark", "outline", "num", "oWOutline", (v) => v], ["wShadow", "watermark", "shadow", "num", "oWShadow", (v) => v],
   ["wColor", "watermark", "color"], ["wOutlineColor", "watermark", "outline_color"], ["wBold", "watermark", "bold", "bool"],
+  ["mEnabled", "music", "enabled", "bool"], ["mVolume", "music", "volume", "num"], ["mFade", "music", "fade_out", "num"],
+  ["mDuck", "music", "duck", "bool"],
   ["sMotion", "motion", "default"], ["sIntensity", "motion", "intensity"], ["sFit", "motion", "fit"],
   ["sTransition", "transition", "type"], ["sTransDur", "transition", "duration", "num", "oTransDur", sec],
   ["sPause", "timing", "scene_pause", "num", "oPause", sec], ["sSentPause", "timing", "sentence_pause", "num", "oSentPause", sec],
@@ -401,6 +404,7 @@ function settingsToUI() {
   $("#sTransDur").disabled = S().transition.type === "cut";
   renderTitleLines();
   updateFormatUI();
+  updateMusicUI();
   $("#projectName").value = state.project.name || "";
 }
 
@@ -1072,6 +1076,7 @@ function loadProject(project, path) {
   renderScenes();
   updatePreviewStale();
   checkImages();
+  if (typeof loadEpisodeContext === "function") loadEpisodeContext();
 }
 
 async function checkImages() {
@@ -1409,6 +1414,95 @@ $("#btnArtRefresh").addEventListener("click", loadArtStyle);
 $("#btnArtOpen").addEventListener("click", () => api("/api/artstyle/open", {}));
 window.addEventListener("focus", loadArtStyle);   // pick up images added in Explorer when you come back
 
+/* ---- background music: one file, looped under the narration for the whole video ---- */
+const musicPlayer = new Audio();
+function updateMusicUI() {
+  const m = S().music, name = $("#mName");
+  name.textContent = m.file ? (m.name || m.file.split(/[\\/]/).pop()) : "No music chosen";
+  name.classList.toggle("set", !!m.file); name.title = m.file || "";
+  $("#btnMusicPlay").hidden = $("#btnMusicClear").hidden = !m.file;
+  if (!m.file || musicPlayer.dataset.file !== m.file) stopMusic();
+}
+function stopMusic() { musicPlayer.pause(); $("#btnMusicPlay").textContent = "▶"; }
+musicPlayer.addEventListener("ended", stopMusic);
+$("#btnMusicPick").addEventListener("click", async () => {
+  try {
+    const r = await api("/api/music/pick", {});
+    if (!r.path) return;
+    Object.assign(S().music, { file: r.path, name: r.name, enabled: true });
+    settingsToUI(); markDirty();
+    toast(`Background music: ${r.name}`);
+  } catch (e) { showMessage("Can't use that music", e.message); }
+});
+$("#btnMusicPlay").addEventListener("click", () => {
+  const m = S().music;
+  if (!musicPlayer.paused) return stopMusic();
+  if (musicPlayer.dataset.file !== m.file) {
+    musicPlayer.src = `/api/music?path=${encodeURIComponent(m.file)}`;
+    musicPlayer.dataset.file = m.file;
+  }
+  musicPlayer.volume = Math.max(0, Math.min(1, +m.volume / 100));
+  musicPlayer.play().then(() => ($("#btnMusicPlay").textContent = "⏸"))
+    .catch(() => showMessage("Can't play the music", "The music file was not found. Choose it again."));
+});
+$("#mVolume").addEventListener("input", (e) => { musicPlayer.volume = Math.max(0, Math.min(1, +e.target.value / 100)); });
+$("#btnMusicClear").addEventListener("click", () => {
+  Object.assign(S().music, { file: "", name: "", enabled: false });
+  settingsToUI(); markDirty();
+});
+
+/* ---- previous episodes: story, last images and time of day carry over into this one ---- */
+let EP = { chain: [] };          // newest first: [previous episode, the one before it, ...]
+async function loadEpisodeContext() {
+  const path = S().story?.continues_from || "";
+  const name = $("#epName"), info = $("#epInfo");
+  $("#btnEpClear").hidden = !path;
+  if (!path) {
+    EP = { chain: [] };
+    name.textContent = "None — this is the first episode"; name.classList.remove("set"); info.hidden = true;
+    return;
+  }
+  try {
+    EP = await api("/api/episode/context", { path });
+    const prev = EP.chain[0];
+    name.textContent = prev.name; name.classList.add("set"); name.title = path;
+    const images = prev.scenes.filter((x) => x.image).length;
+    info.classList.remove("bad"); info.hidden = false;
+    const n = prev.scenes.length;
+    info.textContent = `Uses its story, its last images and its time of day (${n} scene${n === 1 ? "" : "s"}, ${images} image${images === 1 ? "" : "s"})` +
+      (EP.chain.length > 1 ? ` — and ${EP.chain.length - 1} episode${EP.chain.length > 2 ? "s" : ""} before it.` : ".");
+  } catch (e) {
+    EP = { chain: [] };
+    name.textContent = path.split(/[\\/]/).pop(); name.classList.remove("set");
+    info.hidden = false; info.classList.add("bad"); info.textContent = `⚠ ${e.message} Choose it again or clear it.`;
+  }
+}
+$("#btnEpPick").addEventListener("click", async () => {
+  try {
+    const r = await api("/api/episode/pick", { current: state.path || "" });
+    if (!r.path) return;
+    S().story = { ...(S().story || {}), continues_from: r.path };
+    markDirty(); await loadEpisodeContext();
+    toast(`This episode continues from “${r.name}”.`);
+  } catch (e) { showMessage("Can't use that episode", e.message); }
+});
+$("#btnEpClear").addEventListener("click", async () => {
+  S().story = { ...(S().story || {}), continues_from: "" };
+  markDirty(); await loadEpisodeContext();
+});
+
+/* Scene k of this episode; negative k reaches back into the previous episode (-1 = its last scene). */
+function sceneAt(k) {
+  if (k >= 0) return state.project.scenes[k];
+  const prev = EP.chain[0]?.scenes || [];
+  return prev[prev.length + k];
+}
+function sceneLabel(k) {
+  if (k >= 0) return `scene ${k + 1}`;
+  const prev = EP.chain[0];
+  return `the previous episode “${prev.name}”, scene ${prev.scenes.length + k + 1}`;
+}
+
 /* Up to `max` folder images for scene i, rotating so every image in the folder gets used. */
 function styleExamples(i, max) {
   const imgs = ART.images;
@@ -1441,35 +1535,44 @@ function sceneCharacters(i, promptText) {
   return chars.filter((c) => c.main || nameMentioned(text, c.name));
 }
 
-/* The attached images, in order, with a line explaining each one to ChatGPT. */
+const MAX_REFS = 5;   // ChatGPT's image tool rejects requests with more than five reference images
+
+/* The attached images, in order, with a line explaining each one to ChatGPT. Every character in the
+   scene keeps one slot; style examples and previous scenes share the rest. */
 function referencePlan(i, promptText) {
   const files = [], lines = [];
+  const usable = (paths) => paths.filter((p) => p && !state.missing.has(p));
   const add = (paths, describe) => {
-    const ok = paths.filter((p) => p && !state.missing.has(p)).slice(0, 8 - files.length);
+    const ok = usable(paths).slice(0, MAX_REFS - files.length);
     if (!ok.length) return;
     const a = files.length + 1, b = files.length + ok.length;
     files.push(...ok);
     lines.push(`${a === b ? `Image ${a}` : `Images ${a}–${b}`}: ${describe}`);
   };
   const ok = (sc) => sc && sc.image && !state.missing.has(sc.image);
-  const prev = state.project.scenes[i - 1], prev2 = state.project.scenes[i - 2];
+  const prev = sceneAt(i - 1), prev2 = sceneAt(i - 2);
   const continuity = IG().continuity !== false && ok(prev);
-  add(styleExamples(i, continuity ? 2 : 3), "ART STYLE examples. Copy this exact drawing style — line work, character proportions, " +
+  const chars = sceneCharacters(i, promptText).slice(0, 3).filter((c) => usable(c.images).length);
+  const free = MAX_REFS - chars.length;
+  const prevCount = continuity ? (free >= 4 && ok(prev2) ? 2 : 1) : 0;
+  add(styleExamples(i, free - prevCount), "ART STYLE examples. Copy this exact drawing style — line work, character proportions, " +
     "colors, shading and overall vibe. The new image must look like it comes from the same series.");
-  // The two previous scenes: the place, and how each person who already appeared looks. Two, because the
-  // last shot may be a close-up (a phone, a face) that doesn't show everyone.
+  // The two previous scenes (when there's room): the place, and how each person who already appeared looks.
+  // Two, because the last shot may be a close-up (a phone, a face) that doesn't show everyone.
   if (continuity) {
-    const earlier = IG().continuity !== false && ok(prev2) ? [prev2.image] : [];
-    add([...earlier, prev.image], `the PREVIOUS SCENE${earlier.length ? "S" : ""} (scene ${earlier.length ? `${i - 1} and ` : ""}${i}). ` +
+    const earlier = prevCount === 2 ? [prev2.image] : [];
+    add([...earlier, prev.image], `the PREVIOUS SCENE${earlier.length ? "S" : ""} (${earlier.length ? `${sceneLabel(i - 2)} and ` : ""}${sceneLabel(i - 1)}). ` +
       "They may show what the main character was looking at rather than where they are. Use them for continuity of the " +
       "place, layout and lighting, and to keep every person who already appeared looking THE SAME: same hairstyle, clothes, " +
       "accessories and colors (unless the narration says they changed). The basic body design always comes from the ART STYLE " +
       "examples (if an earlier image drew someone in a different style, use the series style for them). Do NOT copy their " +
       "camera angle, distance, framing, composition or poses: this image is a completely new shot of the next moment.");
   }
-  for (const c of sceneCharacters(i, promptText).slice(0, 3)) {
+  // A second image per character only if slots are left over.
+  let spare = MAX_REFS - files.length - chars.length;
+  for (const c of chars) {
     const nm = (c.name || "the main character").trim();
-    add(c.images.slice(0, 2), `the character "${nm}"${c.description ? ` (${c.description.trim()})` : ""}. Draw ${nm} exactly like this: same design, body shape, clothes and colors.`);
+    add(usable(c.images).slice(0, spare-- > 0 ? 2 : 1),`the character "${nm}"${c.description ? ` (${c.description.trim()})` : ""}. Draw ${nm} exactly like this: same design, body shape, clothes and colors.`);
   }
   return { files, lines };
 }
@@ -1534,6 +1637,20 @@ function storySoFar(i, limit = 1800) {
   return [...out, ...kept.map(([, l]) => l)].join("\n");
 }
 
+/* Opening + ending of each previous episode (oldest first), kept short. */
+function previousEpisodesText(limit = 1400) {
+  const clean = (t) => (t || "").replace(/\s+/g, " ").trim();
+  const blocks = [...EP.chain].reverse().map((ep) => {
+    const sc = ep.scenes.map((x, k) => [k, clean(x.script)]).filter(([, t]) => t);
+    if (!sc.length) return "";
+    const pick = sc.length <= 5 ? sc : [sc[0], ...sc.slice(-4)];
+    const lines = pick.map(([k, t], n) => (n === 1 && pick[1][0] > pick[0][0] + 1 ? "(…)\n" : "") + `Scene ${k + 1}: ${t}`);
+    return `Episode “${ep.name}”:\n${lines.join("\n")}`;
+  }).filter(Boolean);
+  while (blocks.join("\n\n").length > limit && blocks.length > 1) blocks.shift();   // drop the oldest first
+  return blocks.join("\n\n").slice(-limit);
+}
+
 /* ---- time of day: the latest time clue in the narration up to this scene ---- */
 const TIME_LOOKS = {
   night: "night: dark sky, street lights and lit windows on, no daylight",
@@ -1545,7 +1662,10 @@ const TIME_LOOKS = {
 };
 function timeOfDay(i) {
   let found = null;
-  state.project.scenes.slice(0, i + 1).forEach((sc, k) => {
+  const items = [];
+  [...EP.chain].reverse().forEach((ep) => ep.scenes.forEach((sc, k) => items.push({ sc, where: `episode “${ep.name}”, scene ${k + 1}` })));
+  state.project.scenes.slice(0, i + 1).forEach((sc, k) => items.push({ sc, where: `scene ${k + 1}` }));
+  items.forEach(({ sc, where }) => {
     const t = (sc.script || "").toLowerCase();
     const clock = [...t.matchAll(/\b(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)/g)].pop();
     let label = null, said = null;
@@ -1563,7 +1683,7 @@ function timeOfDay(i) {
         daylight: "day", daytime: "day", "the next day": "day" }[w];
       said = w;
     }
-    if (label) found = { label, said, scene: k + 1 };
+    if (label) found = { label, said, where };
   });
   return found;
 }
@@ -1591,10 +1711,13 @@ function fullImagePrompt(i, scenePrompt) {
   parts.push("ANATOMY: every person has exactly two arms, two hands and two legs — never an extra arm, hand or leg. Count them. " +
     "Every hand must clearly belong to one of that person's two arms. If someone holds an injured arm, their other hand " +
     "holds it, so they have no free hand left for anything else (don't also show them pushing a door or touching the counter).");
+  const previously = IG().continuity !== false ? previousEpisodesText() : "";
+  if (previously) parts.push(`PREVIOUS EPISODES (this episode continues the story; for context only):
+${previously}`);
   const story = IG().continuity !== false ? storySoFar(i) : "";
   if (story) parts.push(`STORY SO FAR (already shown in earlier images, for context only):\n${story}`);
   const tod = timeOfDay(i);
-  if (tod) parts.push(`TIME OF DAY: ${tod.label} (${tod.said}, from scene ${tod.scene}). Unless the narration says time has passed, ` +
+  if (tod) parts.push(`TIME OF DAY: ${tod.label} (${tod.said}, from ${tod.where}). Unless the narration says time has passed, ` +
     `it is still ${tod.label}. Anything outdoors or seen through windows must look like ${TIME_LOOKS[tod.label]}.`);
   parts.push(`THIS SCENE (draw this moment):\n${scenePrompt.trim()}`);
   parts.push(`CAMERA SHOT: ${SHOTS[shot][1]}` + (prevShot ? ` The previous scene was a ${SHOTS[prevShot][0].toLowerCase()} shot; ` +
@@ -1617,6 +1740,7 @@ const sceneReferences = (i, promptText) => referencePlan(i, promptText).files;
 /* Start one generation and resolve with the new image path. */
 async function runImageJob(i, scenePrompt, onStage) {
   await loadArtStyle();     // re-read the artstyle folder and rules.txt right before every image
+  await loadEpisodeContext();
   const job = await api("/api/imagegen/jobs", { prompt: fullImagePrompt(i, scenePrompt), landscape: true,   // always 16:9
     references: sceneReferences(i, scenePrompt) });
   ig.job = job;
@@ -1864,7 +1988,9 @@ $("#btnAutoAssign").addEventListener("click", () => {
   fullScript.edited = new Set();
   const note = $("#assignNote");
   note.hidden = false;
-  if (r.mode === "labeled") {
+  if (r.mode === "labeled" && !r.parts.length) {
+    note.hidden = true;
+  } else if (r.mode === "labeled") {
     note.className = "assign-note";
     note.textContent = "✓ Assigned by the scene labels in your script (SCENE 1 → scene 1, and so on). Headings are not spoken.";
   } else {

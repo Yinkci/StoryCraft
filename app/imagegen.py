@@ -196,7 +196,8 @@ def generate(prompt, landscape, references=(), cancelled=None, on_progress=None)
     exe = st["codex"]
     # 1672x941 is the exact 16:9 size Codex's image tool produces (1536x1024 would be 3:2, not 16:9).
     size = "1672x941 (16:9 landscape)" if landscape else "941x1672 (9:16 portrait)"
-    refs = [str(Path(r)) for r in references if r and Path(r).is_file()][:8]
+    # The image tool rejects requests with more than five reference images.
+    refs = [str(Path(r)) for r in references if r and Path(r).is_file()][:5]
     work = Path(tempfile.mkdtemp(prefix="storycraft-img-"))
     try:
         schema, output = work / "schema.json", work / "result.json"

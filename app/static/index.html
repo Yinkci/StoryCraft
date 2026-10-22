@@ -108,6 +108,11 @@
         <summary>Scene images (ChatGPT)</summary>
         <div class="ig-status" id="igStatus"><span class="ig-dot"></span><span id="igStatusText">Checking ChatGPT connection…</span>
           <button class="btn sm" id="btnIgCheck">Check again</button></div>
+        <div class="field"><label>Continues from episode <span class="hint">the episode this one follows</span></label>
+          <div class="row ep-row"><span id="epName" class="ep-name">None — this is the first episode</span>
+            <button class="btn sm" id="btnEpPick">Choose…</button>
+            <button class="icon-btn" id="btnEpClear" title="This episode doesn't continue another one" hidden>✕</button></div>
+          <p class="muted small" id="epInfo" hidden></p></div>
         <div class="field"><label>Model <span class="hint">the ChatGPT model Codex uses for scene images</span></label>
           <select id="igModel"><option value="">Codex default</option></select></div>
         <div class="sub-group">
@@ -223,6 +228,20 @@
           <label class="color">Outline <input type="color" id="wOutlineColor"></label>
           <label class="toggle"><input type="checkbox" id="wBold"> Bold</label>
         </div>
+      </details>
+
+      <details open>
+        <summary>Background music</summary>
+        <label class="toggle"><input type="checkbox" id="mEnabled"> Play background music</label>
+        <div class="field"><label>Music file <span class="hint">loops for the whole video</span></label>
+          <div class="row ep-row"><span id="mName" class="ep-name">No music chosen</span>
+            <button class="btn sm" id="btnMusicPick">Choose…</button>
+            <button class="icon-btn" id="btnMusicPlay" title="Listen" hidden>▶</button>
+            <button class="icon-btn" id="btnMusicClear" title="Remove the music" hidden>✕</button></div></div>
+        <div class="field"><label>Volume <span class="hint">under the narration</span></label><div class="slider-num"><input type="range" id="mVolume" min="0" max="100" step="1"><input type="number" class="num" data-for="mVolume" min="0" max="100" step="1"><span class="unit">%</span></div></div>
+        <div class="field"><label>Fade out at the end</label><div class="slider-num"><input type="range" id="mFade" min="0" max="10" step="0.5"><input type="number" class="num" data-for="mFade" min="0" max="10" step="0.5"><span class="unit">s</span></div></div>
+        <label class="toggle"><input type="checkbox" id="mDuck"> Lower the music while the narrator speaks</label>
+        <p class="muted small">Heard in Preview video and the exported MP4.</p>
       </details>
 
       <details>

@@ -196,21 +196,29 @@ const ScriptSplit = (() => {
     const warnings = [];
     if (a.labeled) {
       const nums = a.sections.map((s) => s.number);
-      const unique = new Set(nums).size === nums.length;
-      const ordered = nums.every((v, i) => i === 0 || v > nums[i - 1]);
-      let parts, titles;
+      // Labels always decide the scene — never fall back to filling from scene 1, which would
+      // overwrite scenes the script doesn't mention. A wrong label is named so it can be fixed.
+      const repeated = [...new Set(nums.filter((v, i) => nums.indexOf(v) !== i))];
+      const zero = nums.includes(0);
+      if (repeated.length || zero) {
+        const errors = repeated.map((v) => `SCENE ${v} appears ${nums.filter((x) => x === v).length} times: ` +
+          a.sections.filter((s) => s.number === v).map((s) => `“${s.text.slice(0, 45)}…”`).join(" and ") + ".");
+        if (zero) errors.push("SCENE 0 is not a scene number — scenes start at 1.");
+        return { mode: "labeled", parts: [], titles: [], boundaries: [], analysis: a,
+          warnings: [...errors, "Fix the label in your script, then click Auto assign again. Nothing was changed."] };
+      }
+      const outOfOrder = a.sections.filter((s, i) => i > 0 && s.number < a.sections[i - 1].number)
+        .map((s) => `SCENE ${s.number}`);
+      if (outOfOrder.length) warnings.push(`Out of order in your script: ${outOfOrder.join(", ")} (comes after a higher number). ` +
+        "Each section still goes to the scene its label says — check that the label is right.");
       // Only labeled scenes change. Unlabeled ones are null = "keep as it is", so a script with
       // SCENE 11 and SCENE 12 simply adds those two scenes and leaves scenes 1–10 alone.
-      if (unique && ordered && nums[0] >= 1) {
-        const size = Math.max(sceneCount, nums[nums.length - 1]);
-        parts = Array(size).fill(null); titles = Array(size).fill("");
-        a.sections.forEach((s) => { parts[s.number - 1] = s.text; titles[s.number - 1] = s.title; });
-        for (let i = sceneCount; i < size; i++) if (parts[i] === null) parts[i] = "";   // a gap in new scenes
-      } else {
-        parts = a.sections.map((s) => s.text); titles = a.sections.map((s) => s.title);
-        warnings.push("Scene numbers are repeated or out of order, so sections were assigned top to bottom.");
-        while (parts.length < sceneCount) { parts.push(null); titles.push(""); }
-      }
+      const size = Math.max(sceneCount, ...nums);
+      const parts = Array(size).fill(null), titles = Array(size).fill("");
+      a.sections.forEach((s) => { parts[s.number - 1] = s.text; titles[s.number - 1] = s.title; });
+      for (let i = sceneCount; i < size; i++) if (parts[i] === null) parts[i] = "";   // a gap in new scenes
+      const gaps = []; for (let i = sceneCount; i < size; i++) if (!nums.includes(i + 1)) gaps.push(i + 1);
+      if (gaps.length) warnings.push(`No section for new scene${gaps.length === 1 ? "" : "s"} ${gaps.join(", ")} — ${gaps.length === 1 ? "it" : "they"} will be added empty.`);
       const added = parts.length - sceneCount;
       if (added > 0) warnings.push(`${added} new scene${added === 1 ? "" : "s"} (${sceneCount + 1}${added > 1 ? `–${parts.length}` : ""}) will be added without an image — use 🎨 Generate missing to make ${added === 1 ? "its image" : "their images"}.`);
       if (a.preamble) warnings.push(`Text before the first scene label is not assigned: “${a.preamble.slice(0, 80)}${a.preamble.length > 80 ? "…" : ""}”`);

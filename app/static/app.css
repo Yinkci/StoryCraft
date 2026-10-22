@@ -343,6 +343,11 @@ body.landscape .pair img { width: 96px; aspect-ratio: 16 / 9; }
   background: rgba(0,0,0,.7); color: #fff; font-size: 11px; cursor: pointer; line-height: 18px; padding: 0; }
 .ig-add-ref { display: inline-flex; cursor: pointer; }
 .ig-scope { margin: -4px 0 10px; }
+.ep-row { gap: 8px; }
+.ep-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px;
+  padding: 6px 10px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); }
+.ep-name.set { color: #ffd497; border-color: rgba(255,181,71,.45); }
+#epInfo.bad { color: #ffb3b3; }
 #artThumbs .ig-ref { width: 52px; height: 52px; }
 #artThumbs .more { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 8px; border: 1px solid var(--border);
   color: var(--muted); font-size: 12px; }
